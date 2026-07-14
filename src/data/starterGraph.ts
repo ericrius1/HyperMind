@@ -3,23 +3,78 @@ import type { GraphData, GraphEdge, GraphNode, Vec3 } from '../core/types';
 const CLUSTERS = [
   {
     name: 'Systems',
-    concepts: ['Emergence', 'Feedback loops', 'Constraints', 'Leverage points', 'Networks', 'Adaptation', 'Resilience', 'Second-order effects', 'Boundaries', 'Flow'],
+    concepts: [
+      ['Emergence', 'Order rising unbidden from many quiet rules.'],
+      ['Feedback loops', 'What you change returns to change you.'],
+      ['Constraints', 'The narrow door that gives the room its shape.'],
+      ['Leverage points', 'Small touches where the whole machinery listens.'],
+      ['Networks', 'Meaning traveling along invisible threads.'],
+      ['Adaptation', 'Learning the weather without losing your name.'],
+      ['Resilience', 'The art of bending without becoming gone.'],
+      ['Second-order effects', 'Ripples that arrive after the stone is forgotten.'],
+      ['Boundaries', 'Where one world ends so another can begin.'],
+      ['Flow', 'The quiet current that keeps a system alive.'],
+    ],
   },
   {
     name: 'Making',
-    concepts: ['Craft', 'Prototypes', 'Materials', 'Iteration', 'Tools', 'Taste', 'Composition', 'Structure', 'Rhythm', 'Details'],
+    concepts: [
+      ['Craft', 'Care made visible through patient hands.'],
+      ['Prototypes', 'Rough drafts brave enough to meet the air.'],
+      ['Materials', 'Matter whispering what it wants to become.'],
+      ['Iteration', 'Returning again until the thing finds itself.'],
+      ['Tools', 'Extensions of intention, waiting to be held.'],
+      ['Taste', 'The compass you hone by loving and refusing.'],
+      ['Composition', 'Parts arranged until they begin to sing.'],
+      ['Structure', 'The invisible bones that hold wonder upright.'],
+      ['Rhythm', 'Time given a pulse you can build inside.'],
+      ['Details', 'The small fidelities that make a work feel true.'],
+    ],
   },
   {
     name: 'Mind',
-    concepts: ['Attention', 'Memory', 'Curiosity', 'Intuition', 'Learning', 'Perception', 'Dreams', 'Language', 'Models', 'Meaning'],
+    concepts: [
+      ['Attention', 'The lamp you aim, and so the world you get.'],
+      ['Memory', 'What remains glowing after the moment leaves.'],
+      ['Curiosity', 'The hunger that opens every locked room.'],
+      ['Intuition', 'Knowing that arrives before the argument.'],
+      ['Learning', 'Becoming slightly more than you were yesterday.'],
+      ['Perception', 'The filter through which reality arrives dressed.'],
+      ['Dreams', 'Night’s workshop, rearranging the day’s debris.'],
+      ['Language', 'A bridge of breath between one mind and another.'],
+      ['Models', 'Maps we carry that are never quite the land.'],
+      ['Meaning', 'The gold you mint from what happens to you.'],
+    ],
   },
   {
     name: 'Technology',
-    concepts: ['WebGPU', 'Spatial compute', 'Interfaces', 'Agents', 'Simulation', 'Shaders', 'Data', 'Protocols', 'Local first', 'Tools for thought'],
+    concepts: [
+      ['WebGPU', 'Raw metal of the browser, bent toward light.'],
+      ['Spatial compute', 'Thoughts that live in rooms, not only rows.'],
+      ['Interfaces', 'The handshake between intention and machine.'],
+      ['Agents', 'Helpers that wander on your behalf.'],
+      ['Simulation', 'A world rehearsed until truth shows its face.'],
+      ['Shaders', 'Tiny spells that paint reality each frame.'],
+      ['Data', 'Frozen echoes waiting to be asked the right question.'],
+      ['Protocols', 'Agreements that let strangers speak as kin.'],
+      ['Local first', 'Your tools loyal to your machine before the cloud.'],
+      ['Tools for thought', 'Instruments that widen what a mind can hold.'],
+    ],
   },
   {
     name: 'Living world',
-    concepts: ['Mycelium', 'Ecology', 'Light', 'Water', 'Climate', 'Energy', 'Growth', 'Signals', 'Biodiversity', 'Regeneration'],
+    concepts: [
+      ['Mycelium', 'A hidden web trading news beneath the forest floor.'],
+      ['Ecology', 'Lives braided so tightly they breathe as one.'],
+      ['Light', 'The oldest messenger, writing color on every leaf.'],
+      ['Water', 'The pilgrim element, always becoming elsewhere.'],
+      ['Climate', 'The long weather that writes our shared fate.'],
+      ['Energy', 'The restless gift that makes matter dance.'],
+      ['Growth', 'Patience wearing the shape of living form.'],
+      ['Signals', 'Whispers between bodies that never need words.'],
+      ['Biodiversity', 'A chorus richer for every different voice.'],
+      ['Regeneration', 'Healing that remakes the wound into a door.'],
+    ],
   },
 ] as const;
 
@@ -45,12 +100,12 @@ export function createStarterGraph(): GraphData {
   const edges: GraphEdge[] = [];
 
   CLUSTERS.forEach((cluster, clusterIndex) => {
-    cluster.concepts.forEach((title, localIndex) => {
+    cluster.concepts.forEach(([title, description], localIndex) => {
       const id = `n-${clusterIndex}-${localIndex}`;
       nodes.push({
         id,
         title,
-        description: `${title} is part of the ${cluster.name.toLowerCase()} region. Open this thought, rewrite it, or connect it to something unexpected.`,
+        description,
         cluster: clusterIndex,
         subcluster: `tutorial-${clusterIndex}-${localIndex < 5 ? 'core' : 'field'}`,
         position: positionFor(clusterIndex, localIndex),

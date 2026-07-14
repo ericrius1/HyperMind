@@ -2,10 +2,10 @@ import { buildScene, type SceneSeed } from '../sceneBuilder';
 
 const seed: SceneSeed = {
   id: 'francis',
-  title: 'Francis of Assisi: Kinship, Peace, and the Living World',
+  title: 'Francis of Assisi and the Wild Kinship of Things',
   shortTitle: 'Francis of Assisi',
   kicker: 'BROTHER SUN · SISTER WATER',
-  description: 'Follow Francis from merchant Assisi through conversion, the Canticle, creature legends, encounters across battle lines, and the worldwide Franciscan family.',
+  description: 'Walk out from Assisi with empty hands: meet sun, water, wolf, leper, sultan, and a family still gathering across the centuries.',
   palette: 'ember',
   layout: 'radial',
   shape: 'radial',
@@ -16,7 +16,7 @@ const seed: SceneSeed = {
         {
           id: 'conversion',
           label: 'From Assisi to Conversion',
-          description: 'War, illness, mercy, and renunciation turn a merchant\'s son away from chivalry and toward life among the excluded.',
+          description: 'Begin where the bright dream of knighthood breaks—and a stranger, poorer road opens among the forgotten.',
           concepts: [
             {
               title: 'Merchant\'s Son in Assisi',
@@ -48,7 +48,7 @@ const seed: SceneSeed = {
         {
           id: 'gospel-path',
           label: 'The Gospel Path',
-          description: 'Poverty, minority, fraternity, and a literal hearing of the Gospel become a durable way of life.',
+          description: 'Follow the barefoot experiment: no throne, no hoard, only companions and a Gospel carried into the street.',
           concepts: [
             {
               title: 'The Gospel at the Portiuncula',
@@ -80,7 +80,7 @@ const seed: SceneSeed = {
         {
           id: 'canticle-heavens',
           label: 'A Kinship of the Heavens',
-          description: 'The Canticle gives celestial and elemental creatures family names, placing praise before possession.',
+          description: 'Look up. Sun, moon, wind, and water return as kin, and the world becomes a chorus before it becomes a possession.',
           concepts: [
             {
               title: 'A Song Born at San Damiano',
@@ -144,7 +144,7 @@ const seed: SceneSeed = {
         {
           id: 'wolf-gubbio',
           label: 'The Wolf of Gubbio',
-          description: 'A beloved later legend imagines peace as a covenant that answers violence, fear, and hunger together.',
+          description: 'Enter Gubbio, where a feared wolf waits beyond the walls and peace must answer hunger as well as fear.',
           concepts: [
             {
               title: 'The Little Flowers',

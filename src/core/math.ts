@@ -58,6 +58,14 @@ export function mat4Multiply(a: Mat4, b: Mat4): Mat4 {
   return out;
 }
 
+export function mat4Lerp(a: Mat4, b: Mat4, amount: number): Mat4 {
+  const out = new Float32Array(16);
+  for (let index = 0; index < 16; index += 1) {
+    out[index] = lerp(a[index]!, b[index]!, amount);
+  }
+  return out;
+}
+
 export function mat4Perspective(fovY: number, aspect: number, near: number, far: number): Mat4 {
   const f = 1 / Math.tan(fovY * 0.5);
   const nf = 1 / (near - far);

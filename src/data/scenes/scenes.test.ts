@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_EDGES, MAX_NODES } from '../../core/types';
 import { parseFocus } from '../sceneRoute';
-import { SCENES, SCENES_BY_ID } from './index';
+import { DEFAULT_SCENE_ID, getScene, SCENES, SCENES_BY_ID } from './index';
 
 describe('sample scene catalog', () => {
-  it('contains the tutorial plus three fully nested sample scenes', () => {
-    expect(SCENES.map((scene) => scene.id)).toEqual(['tutorial', 'kabbalah', 'francis', 'pilgrim']);
+  it('contains the default agent-learning world plus four fully nested atlases', () => {
+    expect(DEFAULT_SCENE_ID).toBe('agent-learning');
+    expect(getScene('missing').id).toBe(DEFAULT_SCENE_ID);
+    expect(SCENES.map((scene) => scene.id)).toEqual(['agent-learning', 'tutorial', 'kabbalah', 'francis', 'pilgrim']);
+    const agentScene = SCENES_BY_ID.get(DEFAULT_SCENE_ID)!;
+    expect(agentScene.graph.nodes).toHaveLength(50);
+    expect(agentScene.clusterLabels).toEqual([
+      'RL Foundations',
+      'Learning Algorithms',
+      'Multi-Agent Learning',
+      'Evolutionary Computation',
+      'Persistent San Francisco Lab',
+    ]);
     for (const scene of SCENES) {
       expect(scene.clusterLabels).toHaveLength(5);
       expect(scene.subclusters).toHaveLength(10);

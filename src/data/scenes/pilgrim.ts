@@ -3,10 +3,10 @@ import { buildScene, type SceneSeed } from '../sceneBuilder';
 
 const pilgrimSeed: SceneSeed = {
   id: 'pilgrim',
-  title: 'Pilgrim Worlds / Sacred Roads',
+  title: 'The Roads That Remember Our Footsteps',
   shortTitle: 'Sacred Roads',
   kicker: 'ROADS · RITUALS · WELCOME',
-  description: 'A living map of routes, signs, shelters, religious communities, and destinations that turn pilgrimage into a moving social world.',
+  description: 'Take up the shell and follow the yellow arrow west, from mountain gate to shared table, until the road itself begins to speak.',
   palette: 'verdant',
   layout: 'force',
   shape: 'path',
@@ -17,7 +17,7 @@ const pilgrimSeed: SceneSeed = {
         {
           id: 'historic-routes',
           label: 'Historic routes',
-          description: 'The Camino is an interconnected family of roads shaped by geography, devotion, and changing political worlds.',
+          description: 'There is no single road: only rivers of footsteps joining, parting, and carrying old hopes toward the western horizon.',
           concepts: [
             {
               title: 'Camino Franc\u00e9s',
@@ -44,7 +44,7 @@ const pilgrimSeed: SceneSeed = {
         {
           id: 'crossings-confluences',
           label: 'Crossings & confluences',
-          description: 'Mountains, passes, bridges, and meeting points give the network its physical shape.',
+          description: 'Cross the high passes and old bridges where strangers become companions and every threshold changes the journey.',
           concepts: [
             {
               title: 'Roncesvalles',
@@ -76,7 +76,7 @@ const pilgrimSeed: SceneSeed = {
         {
           id: 'wayshowing-symbols',
           label: 'Wayshowing & symbols',
-          description: 'A layered visual language helps a dispersed community recognize and follow the road.',
+          description: 'Read the road’s secret alphabet—shell, arrow, cairn, and cross—left for travellers not yet arrived.',
           concepts: [
             {
               title: 'Scallop Shell',
@@ -162,7 +162,7 @@ const pilgrimSeed: SceneSeed = {
         {
           id: 'commons-of-the-road',
           label: 'Commons of the road',
-          description: 'Shared food, water, crossings, and sanctuaries turn a trail into a social world.',
+          description: 'Seek the small mercies that make a road humane: cold water, a safe crossing, a place at the table, a light still burning.',
           concepts: [
             {
               title: 'Shared Table',

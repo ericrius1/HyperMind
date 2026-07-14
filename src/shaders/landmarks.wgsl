@@ -65,7 +65,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let crossY = 1.0 - smoothstep(0.035, 0.075, abs(input.local.y));
   let cross = max(crossX, crossY) * (1.0 - smoothstep(0.48, 0.60, radius));
   let tickPhase = f32(input.index % 7u) / 7.0;
-  let pulse = 0.78 + 0.22 * sin(scene.timing.x * 2.0 + tickPhase * 6.28318530718);
+  let animated = step(0.5, scene.render.x);
+  let pulse = mix(1.0, 0.78 + 0.22 * sin(scene.timing.x * 2.0 + tickPhase * 6.28318530718), animated);
   let alpha = max(ring, cross) * pulse;
   if (alpha < 0.002) {
     discard;

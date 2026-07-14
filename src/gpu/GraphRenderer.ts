@@ -12,6 +12,7 @@ import type { CameraFrame } from '../core/camera';
 import type { LayoutId, RenderSkinId } from '../core/types';
 import { GraphBuffers } from './GraphBuffers';
 import { GPUContext } from './GPUContext';
+import { createUVSphere, SPHERE_VERTEX_COUNT } from './sphereMesh';
 
 interface ShaderSet {
   background: string;
@@ -64,18 +65,28 @@ if (import.meta.hot) {
 }
 
 const LAYOUT_INDEX: Record<LayoutId, number> = { force: 0, radial: 1, clusters: 2, lattice: 3 };
+export const PICK_RESULT_NONE = 0xffffffff;
+export const PICK_INDEX_MASK = 0xff;
+
+export function decodePickResult(packed: number): number | null {
+  const value = packed >>> 0;
+  return value === PICK_RESULT_NONE ? null : value & PICK_INDEX_MASK;
+}
 
 export interface RenderFrameInput {
   camera: CameraFrame;
   settings: AppSettings;
   elapsed: number;
   dt: number;
+  dimensionBlend: number;
   runSimulation: boolean;
 }
 
 export class GraphRenderer {
   private readonly gpu: GPUContext;
   private readonly buffers: GraphBuffers;
+  private readonly sphereVertexBuffer: GPUBuffer;
+  private readonly sphereVertexCount = SPHERE_VERTEX_COUNT;
   private backgroundPipeline!: GPURenderPipeline;
   private edgePipeline!: GPURenderPipeline;
   private landmarkPipeline!: GPURenderPipeline;
@@ -91,7 +102,7 @@ export class GraphRenderer {
   private simulationBindGroups!: [GPUBindGroup, GPUBindGroup];
   private pickingBindGroups!: [GPUBindGroup, GPUBindGroup];
   private readonly pickResult: GPUBuffer;
-  private pickPending = false;
+  private pickQueue: Promise<void> = Promise.resolve();
   private readonly onShaderReload = (shaders: ShaderSet): void => {
     this.buildPipelines(shaders);
     this.buildBindGroups();
@@ -100,6 +111,13 @@ export class GraphRenderer {
   constructor(gpu: GPUContext, buffers: GraphBuffers) {
     this.gpu = gpu;
     this.buffers = buffers;
+    const sphereData = createUVSphere();
+    this.sphereVertexBuffer = gpu.device.createBuffer({
+      label: 'Node sphere mesh',
+      size: sphereData.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    gpu.device.queue.writeBuffer(this.sphereVertexBuffer, 0, sphereData);
     this.pickResult = gpu.device.createBuffer({
       label: 'Pick result',
       size: 4,
@@ -153,12 +171,14 @@ export class GraphRenderer {
 
     pass.setPipeline(this.nodePipelines[input.settings.skin]);
     pass.setBindGroup(0, this.nodeBindGroups[input.settings.skin][this.buffers.current]);
-    pass.draw(6, this.buffers.nodeCount);
+    pass.setVertexBuffer(0, this.sphereVertexBuffer);
+    pass.draw(this.sphereVertexCount, this.buffers.nodeCount);
 
     if (input.settings.skin === 'dream') {
       pass.setPipeline(this.dreamAuraPipeline);
       pass.setBindGroup(0, this.dreamAuraBindGroups[this.buffers.current]);
-      pass.draw(6, this.buffers.nodeCount);
+      pass.setVertexBuffer(0, this.sphereVertexBuffer);
+      pass.draw(this.sphereVertexCount, this.buffers.nodeCount);
     }
 
     if (input.settings.showLandmarks) {
@@ -170,15 +190,21 @@ export class GraphRenderer {
     device.queue.submit([encoder.finish()]);
   }
 
-  async pick(pixelX: number, pixelY: number, extraRadius = 9): Promise<number | null> {
-    if (this.pickPending) return null;
-    this.pickPending = true;
+  pick(pixelX: number, pixelY: number, extraRadius = 9): Promise<number | null> {
+    const result = this.pickQueue.then(() => this.executePick(pixelX, pixelY, extraRadius));
+    // Keep the queue usable after a device/readback failure while still returning
+    // that failure to the caller that issued the affected query.
+    this.pickQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async executePick(pixelX: number, pixelY: number, extraRadius: number): Promise<number | null> {
     const { device } = this.gpu;
     const staging = device.createBuffer({
       label: 'Pick readback', size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     try {
-      device.queue.writeBuffer(this.pickResult, 0, new Uint32Array([0xffffffff]));
+      device.queue.writeBuffer(this.pickResult, 0, new Uint32Array([PICK_RESULT_NONE]));
       const pickUniforms = new Float32Array(16);
       pickUniforms.set([pixelX, pixelY, this.buffers.nodeCount, extraRadius]);
       device.queue.writeBuffer(this.buffers.simUniformBuffer, 0, pickUniforms);
@@ -193,15 +219,15 @@ export class GraphRenderer {
       await staging.mapAsync(GPUMapMode.READ);
       const packed = new Uint32Array(staging.getMappedRange())[0]!;
       staging.unmap();
-      return packed === 0xffffffff ? null : packed & 0xffff;
+      return decodePickResult(packed);
     } finally {
       staging.destroy();
-      this.pickPending = false;
     }
   }
 
   dispose(): void {
     shaderReloadListeners.delete(this.onShaderReload);
+    this.sphereVertexBuffer.destroy();
     this.pickResult.destroy();
   }
 
@@ -233,33 +259,77 @@ export class GraphRenderer {
       color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
       alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
     };
+    const sphereLayout: GPUVertexBufferLayout = {
+      arrayStride: 12,
+      attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }],
+    };
     const createRender = (
       label: string,
       module: GPUShaderModule,
-      blend?: GPUBlendState,
-      depthWrite = false,
-      fragmentEntryPoint = 'fs_main',
-      depthCompare: GPUCompareFunction = 'less-equal',
+      options: {
+        blend?: GPUBlendState;
+        depthWrite?: boolean;
+        fragmentEntryPoint?: string;
+        vertexEntryPoint?: string;
+        depthCompare?: GPUCompareFunction;
+        cullMode?: GPUCullMode;
+        sphereMesh?: boolean;
+      } = {},
     ): GPURenderPipeline =>
       device.createRenderPipeline({
         label,
         layout: 'auto',
-        vertex: { module, entryPoint: 'vs_main' },
-        fragment: { module, entryPoint: fragmentEntryPoint, targets: [{ format, blend }] },
-        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        vertex: {
+          module,
+          entryPoint: options.vertexEntryPoint ?? 'vs_main',
+          buffers: options.sphereMesh ? [sphereLayout] : [],
+        },
+        fragment: {
+          module,
+          entryPoint: options.fragmentEntryPoint ?? 'fs_main',
+          targets: [{ format, blend: options.blend }],
+        },
+        primitive: { topology: 'triangle-list', cullMode: options.cullMode ?? 'none' },
         multisample: { count: sampleCount },
-        depthStencil: { format: 'depth24plus', depthWriteEnabled: depthWrite, depthCompare },
+        depthStencil: {
+          format: 'depth24plus',
+          depthWriteEnabled: options.depthWrite ?? false,
+          depthCompare: options.depthCompare ?? 'less-equal',
+        },
       });
 
-    this.backgroundPipeline = createRender('Infinite canvas background', background, undefined, false);
-    this.edgePipeline = createRender('Graph links', edges, alphaBlend, false);
-    this.landmarkPipeline = createRender('Debug landmarks', landmarks, alphaBlend, false);
+    this.backgroundPipeline = createRender('Infinite canvas background', background);
+    this.edgePipeline = createRender('Graph links', edges, { blend: alphaBlend });
+    this.landmarkPipeline = createRender('Debug landmarks', landmarks, { blend: alphaBlend });
     this.nodePipelines = {
-      simple: createRender('Paperlight renderer', simple, alphaBlend, true),
-      luminous: createRender('Luminous renderer', luminous, alphaBlend, true),
-      dream: createRender('Midnight core renderer', dream, additiveBlend, false, 'fs_main', 'always'),
+      simple: createRender('Paperlight renderer', simple, {
+        blend: alphaBlend,
+        depthWrite: true,
+        cullMode: 'back',
+        sphereMesh: true,
+      }),
+      luminous: createRender('Luminous renderer', luminous, {
+        blend: alphaBlend,
+        depthWrite: true,
+        cullMode: 'back',
+        sphereMesh: true,
+      }),
+      dream: createRender('Midnight core renderer', dream, {
+        blend: additiveBlend,
+        depthWrite: true,
+        cullMode: 'back',
+        sphereMesh: true,
+      }),
     };
-    this.dreamAuraPipeline = createRender('Midnight aura renderer', dream, additiveBlend, false, 'fs_aura', 'always');
+    this.dreamAuraPipeline = createRender('Midnight aura renderer', dream, {
+      blend: additiveBlend,
+      depthWrite: false,
+      depthCompare: 'less-equal',
+      cullMode: 'back',
+      sphereMesh: true,
+      vertexEntryPoint: 'vs_aura',
+      fragmentEntryPoint: 'fs_aura',
+    });
     this.simulationPipeline = device.createComputePipeline({
       label: 'GPU force simulation', layout: 'auto', compute: { module: createModule('Simulation shader', shaders.simulation), entryPoint: 'main' },
     });
@@ -328,20 +398,30 @@ export class GraphRenderer {
     scene.set([...input.camera.right, 0], 16);
     scene.set([...input.camera.up, 0], 20);
     scene.set([...input.camera.position, 1], 24);
-    scene.set([this.gpu.width, this.gpu.height, input.camera.zoom, devicePixelRatio], 28);
-    scene.set([input.elapsed, input.dt, input.settings.dimension === '3d' ? 1 : 0, input.settings.skin === 'dream' ? 1 : 0], 32);
-    scene.set([input.settings.animations ? 1 : 0, (input.settings.raySteps - 8) / 16, input.settings.nodeScale, 0.78 + input.settings.glow * 0.34], 36);
+    const renderScale = Math.min(devicePixelRatio || 1, 2) * input.settings.resolutionScale;
+    scene.set([this.gpu.width, this.gpu.height, input.camera.zoom, renderScale], 28);
+    scene.set([input.elapsed, input.dt, input.dimensionBlend, input.settings.skin === 'dream' ? 1 : 0], 32);
+    scene.set([input.settings.animations ? 1 : 0, input.settings.raySteps, input.settings.nodeScale, 0.78 + input.settings.glow * 0.34], 36);
     const palette = PALETTES[input.settings.palette];
     scene.set([...palette.surface, input.settings.showGrid ? 1 : 0], 40);
     scene.set([...palette.accent, input.settings.edgeOpacity], 44);
     scene.set([input.settings.glow, input.settings.pulse, input.settings.nodeDensity, 0], 48);
+    scene.set([
+      input.settings.dreamFieldScale,
+      input.settings.dreamWarp,
+      input.settings.dreamJitter,
+      input.settings.dreamLodStrength,
+    ], 52);
+    scene.set([input.settings.dreamFieldLayers, 0, 0, 0], 56);
     this.gpu.device.queue.writeBuffer(this.buffers.sceneUniformBuffer, 0, scene);
   }
 
   private writeSimulationUniforms(input: RenderFrameInput): void {
     const settings = input.settings;
     const uniforms = new Float32Array(16);
-    const simulationDt = settings.animations ? input.dt * settings.simulationSpeed : 0;
+    // Simulation scheduling belongs to the app lifecycle. Visual animation can
+    // remain enabled while normal-view node positions stay completely static.
+    const simulationDt = input.dt * settings.simulationSpeed;
     uniforms.set([simulationDt, this.buffers.nodeCount, settings.dimension === '2d' ? 2 : 3, LAYOUT_INDEX[settings.layout]], 0);
     uniforms.set([settings.repulsion, settings.spring, settings.damping * 3.5, settings.centering], 4);
     uniforms.set([settings.springLength / settings.nodeDensity, 16, 55, input.elapsed], 8);

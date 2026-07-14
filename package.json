@@ -2,23 +2,64 @@
   "name": "hypermind",
   "private": true,
   "version": "0.1.0",
+  "description": "Raw-WebGPU spatial canvas for connected ideas",
+  "author": "HyperMind",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
+    "dev:desktop": "vite --mode desktop",
     "build": "tsc --noEmit && vite build",
+    "build:web": "tsc --noEmit && vite build",
+    "build:desktop": "tsc --noEmit && vite build --mode desktop && electron-builder",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "box3d.js": "^0.0.2",
     "stats.js": "^0.17.0",
     "tweakpane": "^4.0.5"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "@types/stats.js": "^0.17.4",
     "@webgpu/types": "^0.1.71",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
+    "vite-plugin-electron": "^1.1.0",
+    "vite-plugin-electron-renderer": "^1.0.0",
     "vitest": "^4.1.10"
+  },
+  "build": {
+    "appId": "app.hypermind.desktop",
+    "productName": "HyperMind",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
   }
 }

@@ -4,8 +4,16 @@ import { clamp, transformPoint } from './core/math';
 import type { GraphNode, GraphScene, RenderSkinId, ScenePortal, Vec3, ViewDimension } from './core/types';
 import { SettingsStore, type AppSettings } from './config/settings';
 import { GraphStore } from './data/GraphStore';
+import {
+  defaultExportName,
+  migrateLocalStorage,
+  openBundleFromDisk,
+  openPersistenceStore,
+  saveBundleToDisk,
+  type PersistenceStore,
+} from './data/persistence';
 import { parseFocus, parseSceneRoute, sceneShareURL, type SceneFocus } from './data/sceneRoute';
-import { getScene, SCENES } from './data/scenes';
+import { DEFAULT_SCENE_ID, getScene, SCENES } from './data/scenes';
 import { GPUContext } from './gpu/GPUContext';
 import { GraphBuffers } from './gpu/GraphBuffers';
 import { GraphRenderer } from './gpu/GraphRenderer';
@@ -40,12 +48,28 @@ interface SaveEventDetail {
   cluster: number;
 }
 
-const INITIAL_ROUTE = parseSceneRoute(window.location.href, SCENES.map((scene) => scene.id), 'tutorial');
+const INITIAL_ROUTE = parseSceneRoute(window.location.href, SCENES.map((scene) => scene.id), DEFAULT_SCENE_ID);
+const LAYOUT_RELAXATION_MS = 3000;
+const DIMENSION_BLEND_MS = 3000;
+
+const LAYOUT_SETTING_KEYS = new Set<keyof AppSettings>([
+  'dimension',
+  'layout',
+  'physicsEngine',
+  'nodeDensity',
+  'repulsion',
+  'spring',
+  'springLength',
+  'centering',
+  'damping',
+  'clusterStrength',
+]);
 
 class HyperMindApp {
   private readonly ui: AppUI;
   private readonly diagnostics: Diagnostics;
   private readonly settings = new SettingsStore();
+  private persist: PersistenceStore | null = null;
   private currentScene = getScene(INITIAL_ROUTE.sceneId);
   private currentFocus: SceneFocus = INITIAL_ROUTE.focus;
   private readonly graph = new GraphStore(this.currentScene.id, this.currentScene.graph);
@@ -57,6 +81,7 @@ class HyperMindApp {
   private selected = new Set<number>();
   private hovered: number | null = null;
   private pointer: PointerSession | null = null;
+  private readonly uiPointers = new Set<number>();
   private linkSource: number | null = null;
   private pendingCreatePosition: Vec3 | null = null;
   private funPhysics = false;
@@ -70,6 +95,16 @@ class HyperMindApp {
   private lastSelectedRead = 0;
   private lastStatusUpdate = 0;
   private frameHandle = 0;
+  private layoutMotionUntil = 0;
+  private layoutWasMoving = false;
+  private positionReadPending = false;
+  private positionReadQueued = false;
+  private inspectorOpen = false;
+  private selectionVersion = 0;
+  private dimensionBlend = 0;
+  private dimensionBlendFrom = 0;
+  private dimensionBlendTo = 0;
+  private dimensionBlendStart = 0;
 
   constructor(root: HTMLElement) {
     this.settings.values.palette = this.currentScene.palette;
@@ -79,8 +114,16 @@ class HyperMindApp {
   }
 
   async start(): Promise<void> {
-    this.ui.setLoading(true, 'Waking the GPU…');
+    this.ui.setLoading(true, 'Opening local atlas…');
     try {
+      this.persist = await openPersistenceStore();
+      await migrateLocalStorage(this.persist);
+      await this.settings.attachPersistence(this.persist);
+      this.settings.values.palette = this.currentScene.palette;
+      this.settings.values.layout = this.currentScene.layout;
+      await this.graph.attachPersistence(this.persist);
+
+      this.ui.setLoading(true, 'Waking the GPU…');
       this.gpu = await GPUContext.create(this.ui.canvas, {
         onDeviceLost: (message) => this.handleDeviceLost(message),
       });
@@ -88,6 +131,10 @@ class HyperMindApp {
       this.renderer = new GraphRenderer(this.gpu, this.buffers);
       this.camera.setDimension(this.settings.values.dimension);
       this.camera.setMode(this.settings.values.cameraMode);
+      this.camera.setZoomBounds(this.settings.values.minZoom, this.settings.values.maxZoom);
+      this.dimensionBlend = this.settings.values.dimension === '3d' ? 1 : 0;
+      this.dimensionBlendFrom = this.dimensionBlend;
+      this.dimensionBlendTo = this.dimensionBlend;
       this.bindUI();
       this.ui.setScenes(SCENES, this.currentScene);
       this.ui.setSubclusters(this.currentScene.subclusters, this.currentFocus);
@@ -109,6 +156,10 @@ class HyperMindApp {
     cancelAnimationFrame(this.frameHandle);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('pointerup', this.onUiPointerEnd);
+    window.removeEventListener('pointercancel', this.onUiPointerEnd);
+    const shell = this.ui.canvas.parentElement;
+    shell?.removeEventListener('pointerdown', this.onUiPointerDown, true);
     const canvas = this.ui.canvas;
     canvas.removeEventListener('pointerdown', this.onPointerDown);
     canvas.removeEventListener('pointermove', this.onPointerMove);
@@ -136,10 +187,13 @@ class HyperMindApp {
     const scale = Math.min(window.devicePixelRatio || 1, 2) * this.settings.values.resolutionScale;
     this.gpu.resize(rect.width * scale, rect.height * scale);
     this.camera.update(dt);
+    this.updateDimensionBlend(now);
 
+    const layoutIsMoving = this.funPhysics || now < this.layoutMotionUntil;
     if (this.isBox3DRunning() && this.physicsReady) {
-      const positions = this.physics.step(this.settings.values.animations || this.funPhysics ? dt : 0);
+      const positions = this.physics.step(layoutIsMoving ? dt : 0);
       this.buffers.writePositions(positions);
+      this.graph.persistPositions(positions, 3);
       if (this.funPhysics && positions.length >= 3) {
         let centerX = 0;
         let centerY = 0;
@@ -157,21 +211,28 @@ class HyperMindApp {
       }
     }
 
-    const cameraFrame = this.camera.frame(this.gpu.width, this.gpu.height);
+    const cameraFrame = this.camera.frame(this.gpu.width, this.gpu.height, this.dimensionBlend);
     this.renderer.render({
       camera: cameraFrame,
       settings: this.settings.values,
       elapsed: this.elapsed,
       dt,
-      runSimulation: !this.isBox3DRunning(),
+      dimensionBlend: this.dimensionBlend,
+      runSimulation: !this.isBox3DRunning() && layoutIsMoving,
     });
+
+    const gpuLayoutMoving = !this.isBox3DRunning() && layoutIsMoving;
+    if (this.layoutWasMoving && !gpuLayoutMoving) this.queueGpuPositionPersist();
+    this.layoutWasMoving = gpuLayoutMoving;
 
     this.updateSelectedOverlay(now, cameraFrame.viewProjection, rect);
     this.diagnostics.endFrame(rawDt * 1000);
     if (now - this.lastStatusUpdate > 350) {
       this.lastStatusUpdate = now;
       this.ui.setRuntimeStatus(
-        this.funPhysics ? `BOX3D · ${this.funPreset.toUpperCase()}` : this.isBox3DRunning() ? 'BOX3D · DATA' : 'WEBGPU · LIVE',
+        this.funPhysics
+          ? `BOX3D · ${this.funPreset.toUpperCase()}`
+          : `${this.isBox3DRunning() ? 'BOX3D' : 'WEBGPU'} · ${layoutIsMoving ? 'LAYOUT' : 'STATIC'}`,
         this.camera.dimension,
       );
     }
@@ -184,18 +245,21 @@ class HyperMindApp {
     };
     listen<ViewDimension>('dimension', (dimension) => this.settings.set('dimension', dimension));
     listen<RenderSkinId>('skin', (skin) => this.settings.set('skin', skin));
-    listen<string>('scene', (sceneId) => this.switchScene(sceneId, { type: 'topic' }));
+    listen<string>('scene', (sceneId) => void this.switchScene(sceneId, { type: 'topic' }));
     listen<SceneFocus>('focus', (focus) => this.applyFocus(focus));
     listen<null>('share', () => void this.copyShareLink(this.currentFocus));
     listen<{ id: string }>('share-node', ({ id }) => void this.copyShareLink({ type: 'node', id }));
-    listen<ScenePortal>('portal', (portal) => this.openPortal(portal));
+    listen<ScenePortal>('portal', (portal) => void this.openPortal(portal));
     listen<AddEventDetail>('add', (detail) => this.addNode(detail));
     listen<SaveEventDetail>('save', (detail) => this.saveNode(detail));
     listen<{ id: string }>('delete', ({ id }) => this.deleteNode(id));
     listen<{ id: string }>('link', ({ id }) => this.beginLink(id));
+    listen<null>('inspector-close', () => { this.inspectorOpen = false; });
     listen<boolean>('physics-toggle', (active) => void this.setFunPhysics(active));
     listen<FunPhysicsPreset>('physics-preset', (preset) => void this.setFunPreset(preset));
     listen<{ query: string } | string>('search', (detail) => this.search(typeof detail === 'string' ? detail : detail.query));
+    listen<'scene' | 'all'>('export', (scope) => void this.exportAtlas(scope));
+    listen<null>('import', () => void this.importAtlas());
 
     this.settings.addEventListener('change', (event) => {
       const key = (event as CustomEvent<{ key: keyof AppSettings | null }>).detail.key;
@@ -214,10 +278,15 @@ class HyperMindApp {
       } else {
         this.buffers.updatePalette(this.settings.values);
       }
+      this.wakeLayoutMotion();
       if (this.isBox3DRunning()) void this.syncPhysicsGraph(false);
     });
 
     const canvas = this.ui.canvas;
+    const shell = canvas.parentElement;
+    shell?.addEventListener('pointerdown', this.onUiPointerDown, true);
+    window.addEventListener('pointerup', this.onUiPointerEnd);
+    window.addEventListener('pointercancel', this.onUiPointerEnd);
     canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointermove', this.onPointerMove);
@@ -229,8 +298,41 @@ class HyperMindApp {
     window.addEventListener('keyup', this.onKeyUp);
   }
 
+  private readonly onUiPointerDown = (event: PointerEvent): void => {
+    if (!(event.target instanceof Element) || event.target === this.ui.canvas) return;
+    this.uiPointers.add(event.pointerId);
+    this.setCanvasInputBlocked(true);
+    this.cancelPointerSession();
+  };
+
+  private readonly onUiPointerEnd = (event: PointerEvent): void => {
+    if (!this.uiPointers.delete(event.pointerId)) return;
+    if (this.uiPointers.size === 0) this.setCanvasInputBlocked(false);
+  };
+
+  private setCanvasInputBlocked(blocked: boolean): void {
+    this.ui.canvas.classList.toggle('is-input-blocked', blocked);
+  }
+
+  private cancelPointerSession(): void {
+    const pointer = this.pointer;
+    if (!pointer) return;
+    if (this.ui.canvas.hasPointerCapture(pointer.id)) {
+      this.ui.canvas.releasePointerCapture(pointer.id);
+    }
+    if (pointer.mode === 'drag') {
+      for (const index of pointer.bases.keys()) {
+        const node = this.graph.nodes[index];
+        if (!node) continue;
+        this.buffers.updateNodeMeta(index, this.selected.has(index), false, node.pinned ? 1 : 0);
+        if (this.isBox3DRunning() && this.physicsReady) this.physics.endDrag(node.id);
+      }
+    }
+    this.pointer = null;
+  }
+
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (event.button > 2) return;
+    if (this.uiPointers.size > 0 || event.button > 2) return;
     this.ui.canvas.setPointerCapture(event.pointerId);
     this.pointer = {
       id: event.pointerId,
@@ -253,6 +355,7 @@ class HyperMindApp {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (this.uiPointers.size > 0) return;
     const pointer = this.pointer;
     if (!pointer || pointer.id !== event.pointerId) return;
     const dx = event.clientX - pointer.lastX;
@@ -270,6 +373,7 @@ class HyperMindApp {
           this.camera.dimension === '2d' ? 0 : base.position[2] + worldDelta[2],
         ];
         this.buffers.updateNodePosition(index, position, base.radius);
+        this.graph.setNodePosition(index, position);
         if (this.isBox3DRunning() && this.physicsReady) {
           const node = this.graph.nodes[index]!;
           this.physics.updateDrag(node.id, { x: position[0], y: position[1], z: position[2] });
@@ -305,15 +409,26 @@ class HyperMindApp {
   };
 
   private readonly onDoubleClick = (event: MouseEvent): void => {
+    if (this.uiPointers.size > 0) return;
     event.preventDefault();
     const rect = this.ui.canvas.getBoundingClientRect();
-    this.pendingCreatePosition = this.camera.dimension === '2d'
-      ? this.camera.screenToWorld2D(event.clientX, event.clientY, rect)
-      : [...this.camera.center] as Vec3;
-    this.ui.showComposer(true, event.clientX, event.clientY);
+    const pixelX = (event.clientX - rect.left) * (this.gpu.width / Math.max(1, rect.width));
+    const pixelY = (event.clientY - rect.top) * (this.gpu.height / Math.max(1, rect.height));
+    void this.renderer.pick(pixelX, pixelY).then((index) => {
+      if (index !== null && index >= 0 && index < this.graph.nodes.length) {
+        this.selectOnly(index);
+        this.openInspector(index);
+        return;
+      }
+      this.pendingCreatePosition = this.camera.dimension === '2d'
+        ? this.camera.screenToWorld2D(event.clientX, event.clientY, rect)
+        : [...this.camera.center] as Vec3;
+      this.ui.showComposer(true, event.clientX, event.clientY);
+    });
   };
 
   private readonly onWheel = (event: WheelEvent): void => {
+    if (this.uiPointers.size > 0) return;
     event.preventDefault();
     this.camera.zoomAt(event.deltaY, event.clientX, event.clientY, this.ui.canvas.getBoundingClientRect());
   };
@@ -321,8 +436,28 @@ class HyperMindApp {
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     const target = event.target as HTMLElement | null;
     const typing = target?.matches('input, textarea, select, [contenteditable="true"]') ?? false;
-    if (!typing) this.camera.key(event.code, true);
+    if (event.key === 'Escape') {
+      if (this.inspectorOpen || this.ui.isInspectorOpen()) {
+        event.preventDefault();
+        this.closeInspector();
+        return;
+      }
+      if (typing || event.repeat) return;
+      this.linkSource = null;
+      this.ui.showComposer(false);
+      this.clearSelection();
+      return;
+    }
     if (typing || event.repeat) return;
+    if (event.code === 'Space') {
+      const index = this.firstSelected();
+      if (index !== null) {
+        event.preventDefault();
+        this.openInspector(index);
+        return;
+      }
+    }
+    this.camera.key(event.code, true);
     if (event.key === '/') {
       event.preventDefault();
       this.diagnostics.toggle();
@@ -331,15 +466,14 @@ class HyperMindApp {
       this.diagnostics.refresh();
     } else if (event.key === '.') {
       this.settings.reset();
+    } else if (event.key === 'c' || event.key === 'C') {
+      event.preventDefault();
+      this.settings.set('dimension', this.settings.values.dimension === '2d' ? '3d' : '2d');
     } else if (event.key === 'f' || event.key === 'F') {
       void this.setFunPhysics(!this.funPhysics);
     } else if (event.key === '1' || event.key === '2' || event.key === '3') {
       const skin = ({ '1': 'simple', '2': 'luminous', '3': 'dream' } as const)[event.key];
       this.settings.set('skin', skin);
-    } else if (event.key === 'Escape') {
-      this.linkSource = null;
-      this.ui.showComposer(false);
-      this.clearSelection();
     }
   };
 
@@ -372,11 +506,13 @@ class HyperMindApp {
     } else if (!this.selected.has(index)) {
       this.selectOnly(index);
     } else {
-      this.showSelectedInspector(index);
+      this.showSelectedPeek(index);
     }
     if (!this.selected.has(index)) return;
 
     const snapshots = await this.buffers.readNodes([...this.selected]);
+    const pickedNode = snapshots.get(index);
+    if (pickedNode) this.camera.focus(pickedNode.position);
     const currentPointer = this.pointer;
     if (!currentPointer || currentPointer.id !== pointerId) return;
     currentPointer.bases = snapshots;
@@ -426,7 +562,7 @@ class HyperMindApp {
       cluster: clamp(Math.round(detail.cluster), 0, 4),
     });
     const node = this.graph.get(detail.id);
-    if (node) this.ui.showInspector(node);
+    if (node && this.inspectorOpen) this.ui.showInspector(node);
     this.ui.toast('Saved');
   }
 
@@ -456,21 +592,66 @@ class HyperMindApp {
     this.applyFocus({ type: 'node', id: this.graph.nodes[index]!.id });
   }
 
-  private switchScene(sceneId: string, focus: SceneFocus, updateURL = true): void {
+  private async switchScene(sceneId: string, focus: SceneFocus, updateURL = true): Promise<void> {
     const scene = getScene(sceneId);
     const isNewScene = scene.id !== this.currentScene.id;
     if (isNewScene) {
+      await this.flushLivePositions();
       this.currentScene = scene;
       this.currentFocus = { type: 'topic' };
       this.settings.set('palette', scene.palette);
       this.settings.set('layout', scene.layout);
-      this.graph.switchScene(scene.id, scene.graph);
+      await this.graph.switchScene(scene.id, scene.graph);
       this.ui.setScene(scene);
       this.ui.setSubclusters(scene.subclusters, focus);
       this.ui.setNodeCount(this.graph.nodes.length, this.graph.edges.length);
     }
     requestAnimationFrame(() => this.applyFocus(focus, updateURL));
     if (isNewScene) this.ui.toast(`${scene.shortTitle} loaded`);
+  }
+
+  private async exportAtlas(scope: 'scene' | 'all'): Promise<void> {
+    if (!this.persist) {
+      this.ui.toast('Local storage is not ready yet');
+      return;
+    }
+    await this.flushLivePositions();
+    await this.persist.saveSettings(this.settings.snapshot());
+    const bundle = await this.persist.exportBundle(scope === 'scene' ? [this.currentScene.id] : undefined);
+    const saved = await saveBundleToDisk(
+      bundle,
+      defaultExportName(scope === 'scene' ? this.currentScene.id : undefined),
+    );
+    if (saved) {
+      const count = Object.keys(bundle.scenes).length;
+      this.ui.toast(count === 1 ? 'Exported this world' : `Exported ${count} worlds`);
+    }
+  }
+
+  private async importAtlas(): Promise<void> {
+    if (!this.persist) {
+      this.ui.toast('Local storage is not ready yet');
+      return;
+    }
+    try {
+      const bundle = await openBundleFromDisk();
+      if (!bundle) return;
+      const imported = await this.persist.importBundle(bundle, 'replace');
+      if (bundle.settings?.values) {
+        Object.assign(this.settings.values, bundle.settings.values);
+        this.settings.changed();
+      }
+      if (imported.includes(this.currentScene.id)) {
+        await this.graph.attachPersistence(this.persist);
+        this.buffers.rebuild(this.settings.values);
+        this.ui.setNodeCount(this.graph.nodes.length, this.graph.edges.length);
+        requestAnimationFrame(() => this.applyFocus({ type: 'topic' }, false));
+      }
+      this.ui.toast(imported.length === 1 ? 'Imported world' : `Imported ${imported.length} worlds`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.ui.toast(message);
+    }
   }
 
   private applyFocus(requestedFocus: SceneFocus, updateURL = true): void {
@@ -560,8 +741,8 @@ class HyperMindApp {
     return focus;
   }
 
-  private openPortal(portal: ScenePortal): void {
-    this.switchScene(portal.scene, parseFocus(portal.focus ?? null));
+  private async openPortal(portal: ScenePortal): Promise<void> {
+    await this.switchScene(portal.scene, parseFocus(portal.focus ?? null));
   }
 
   private async copyShareLink(focus: SceneFocus): Promise<void> {
@@ -606,6 +787,7 @@ class HyperMindApp {
     } else {
       this.physics.clearFunPreset();
       this.configurePhysics();
+      this.layoutMotionUntil = 0;
       this.ui.toast('Back to data mode');
     }
   }
@@ -676,18 +858,44 @@ class HyperMindApp {
     });
   }
 
+  private updateDimensionBlend(now: number): void {
+    const duration = Math.max(1, DIMENSION_BLEND_MS);
+    const t = clamp((now - this.dimensionBlendStart) / duration, 0, 1);
+    const eased = t * t * (3 - 2 * t);
+    this.dimensionBlend = this.dimensionBlendFrom + (this.dimensionBlendTo - this.dimensionBlendFrom) * eased;
+    this.camera.setTransitioning(t < 1);
+  }
+
+  private beginDimensionBlend(dimension: ViewDimension): void {
+    this.dimensionBlendFrom = this.dimensionBlend;
+    this.dimensionBlendTo = dimension === '3d' ? 1 : 0;
+    this.dimensionBlendStart = performance.now();
+  }
+
   private applySettingsChange(key: keyof AppSettings | null): void {
     const settings = this.settings.values;
-    if (key === null || key === 'dimension') {
+    if (key === 'dimension') {
+      this.beginDimensionBlend(settings.dimension);
+      this.camera.setDimension(settings.dimension);
+      this.physics.setDimension(settings.dimension);
+    } else if (key === null) {
+      this.dimensionBlend = settings.dimension === '3d' ? 1 : 0;
+      this.dimensionBlendFrom = this.dimensionBlend;
+      this.dimensionBlendTo = this.dimensionBlend;
+      this.camera.setTransitioning(false);
       this.camera.setDimension(settings.dimension);
       this.physics.setDimension(settings.dimension);
     }
     if (key === null || key === 'cameraMode') this.camera.setMode(settings.cameraMode);
+    if (key === null || key === 'minZoom' || key === 'maxZoom') {
+      this.camera.setZoomBounds(settings.minZoom, settings.maxZoom);
+    }
     if (key === null || key === 'palette') this.buffers.updatePalette(settings);
     if (this.physics.initialized) this.configurePhysics();
     if ((key === 'physicsEngine' || key === null) && settings.physicsEngine === 'box3d' && !this.physicsReady) {
       void this.syncPhysicsGraph(false);
     }
+    if (key === null || LAYOUT_SETTING_KEYS.has(key)) this.wakeLayoutMotion();
     if (key !== null) this.diagnostics.refresh();
     this.syncUIFromSettings();
   }
@@ -698,30 +906,77 @@ class HyperMindApp {
     this.ui.setPhysics(this.funPhysics, this.funPreset);
     this.ui.setScene(this.currentScene);
     document.documentElement.dataset.palette = this.settings.values.palette;
+    document.documentElement.classList.toggle('is-help-hidden', !this.settings.values.showHelp);
   }
 
   private isBox3DRunning(): boolean {
     return this.funPhysics || this.settings.values.physicsEngine === 'box3d';
   }
 
+  private wakeLayoutMotion(duration = LAYOUT_RELAXATION_MS): void {
+    if (this.funPhysics) return;
+    this.layoutMotionUntil = Math.max(this.layoutMotionUntil, performance.now() + duration);
+  }
+
+  private queueGpuPositionPersist(): void {
+    if (this.positionReadPending) {
+      this.positionReadQueued = true;
+      return;
+    }
+    this.positionReadPending = true;
+    const sceneId = this.graph.sceneId;
+    void this.buffers.readPositions()
+      .then((positions) => {
+        if (sceneId === this.graph.sceneId) this.graph.persistPositions(positions);
+      })
+      .catch((error) => console.error('Failed to read live graph positions', error))
+      .finally(() => {
+        this.positionReadPending = false;
+        if (this.positionReadQueued) {
+          this.positionReadQueued = false;
+          this.queueGpuPositionPersist();
+        }
+      });
+  }
+
+  private async flushLivePositions(): Promise<void> {
+    if (!this.buffers || !this.gpu) {
+      await this.graph.flushPositions();
+      return;
+    }
+    if (this.isBox3DRunning() && this.physicsReady) {
+      this.graph.persistPositions(this.physics.getPositions(), 3);
+    } else {
+      await this.gpu.device.queue.onSubmittedWorkDone();
+      this.graph.persistPositions(await this.buffers.readPositions());
+    }
+    await this.graph.flushPositions();
+  }
+
   private selectOnly(index: number, updateFocus = true): void {
+    this.selectionVersion += 1;
     this.selected = new Set(index >= 0 ? [index] : []);
+    this.selectedPosition = index >= 0 && this.graph.nodes[index]
+      ? [...this.graph.nodes[index]!.position]
+      : null;
     this.refreshSelectionVisuals();
     if (index >= 0) {
-      this.showSelectedInspector(index);
+      this.showSelectedPeek(index);
       if (updateFocus) this.setRouteFocus({ type: 'node', id: this.graph.nodes[index]!.id });
     }
   }
 
   private clearSelection(resetFocus = true): void {
     if (this.selected.size === 0) {
+      this.closeInspector();
       if (resetFocus) this.setRouteFocus({ type: 'topic' });
       return;
     }
+    this.selectionVersion += 1;
     this.selected.clear();
     this.selectedPosition = null;
     this.refreshSelectionVisuals();
-    this.ui.showInspector(null);
+    this.closeInspector();
     this.ui.setSelectedLabel(null);
     if (resetFocus) this.setRouteFocus({ type: 'topic' });
   }
@@ -733,19 +988,34 @@ class HyperMindApp {
     }
     const first = this.firstSelected();
     if (first === null) {
-      this.ui.showInspector(null);
+      this.closeInspector();
       this.ui.setSelectedLabel(null);
     } else {
-      this.showSelectedInspector(first);
+      this.showSelectedPeek(first);
     }
   }
 
-  private showSelectedInspector(index: number): void {
+  private showSelectedPeek(index: number): void {
     const node = this.graph.nodes[index];
     if (!node) return;
-    this.ui.showInspector(node);
-    this.ui.setSelectedLabel(this.settings.values.showLabels ? node.title : null);
+    if (this.inspectorOpen) this.ui.showInspector(node);
+    const blurb = this.settings.values.showLabels ? nodeBlurb(node) : null;
+    this.ui.setSelectedLabel(this.settings.values.showLabels ? node.title : null, blurb);
     this.lastSelectedRead = 0;
+  }
+
+  private openInspector(index: number): void {
+    const node = this.graph.nodes[index];
+    if (!node) return;
+    this.inspectorOpen = true;
+    this.ui.showComposer(false);
+    this.ui.showInspector(node);
+  }
+
+  private closeInspector(): void {
+    if (!this.inspectorOpen && !this.ui.isInspectorOpen()) return;
+    this.inspectorOpen = false;
+    this.ui.showInspector(null);
   }
 
   private firstSelected(): number | null {
@@ -754,32 +1024,38 @@ class HyperMindApp {
 
   private updateSelectedOverlay(now: number, viewProjection: Float32Array, rect: DOMRect): void {
     const index = this.firstSelected();
-    if (index === null || !this.settings.values.showLabels) {
-      this.ui.setSelectedLabel(null);
+    if (index === null || !this.settings.values.showLabels || this.inspectorOpen) {
+      if (this.inspectorOpen) this.ui.setSelectedLabel(null);
+      else if (index === null || !this.settings.values.showLabels) this.ui.setSelectedLabel(null);
       return;
     }
     if (this.isBox3DRunning() && this.physicsReady) {
       const positions = this.physics.getPositions();
       const offset = index * 3;
       this.selectedPosition = [positions[offset]!, positions[offset + 1]!, positions[offset + 2]!];
-    } else if (!this.selectedReadPending && now - this.lastSelectedRead > 140) {
+    } else if (!this.selectedReadPending && now - this.lastSelectedRead > 50) {
       this.lastSelectedRead = now;
       this.selectedReadPending = true;
+      const selectionVersion = this.selectionVersion;
       void this.buffers.readNodes([index]).then((result) => {
-        this.selectedPosition = result.get(index)?.position ?? null;
+        if (selectionVersion === this.selectionVersion && this.firstSelected() === index) {
+          this.selectedPosition = result.get(index)?.position ?? null;
+        }
       }).finally(() => { this.selectedReadPending = false; });
     }
     const position = this.selectedPosition;
     const node = this.graph.nodes[index];
     if (!position || !node) return;
     const clip = transformPoint(viewProjection, position);
-    if (clip[3] <= 0) {
+    const ndcX = clip[0] / Math.max(clip[3], 0.00001);
+    const ndcY = clip[1] / Math.max(clip[3], 0.00001);
+    if (clip[3] <= 0 || ndcX < -1.08 || ndcX > 1.08 || ndcY < -1.08 || ndcY > 1.08) {
       this.ui.setSelectedLabel(null);
       return;
     }
-    const x = (clip[0] / clip[3] * 0.5 + 0.5) * rect.width;
-    const y = (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * rect.height;
-    this.ui.setSelectedLabel(node.title, x, y);
+    const x = (ndcX * 0.5 + 0.5) * rect.width;
+    const y = (1 - (ndcY * 0.5 + 0.5)) * rect.height;
+    this.ui.setSelectedLabel(node.title, nodeBlurb(node), x, y);
   }
 
   private handleDeviceLost(message: string): void {
@@ -788,8 +1064,24 @@ class HyperMindApp {
   }
 }
 
+function nodeBlurb(node: GraphNode): string {
+  const text = node.description.trim();
+  if (!text) return '';
+  const match = text.match(/^[^.!?]+[.!?]?/);
+  return (match?.[0] ?? text).trim();
+}
+
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('HyperMind could not find its application root.');
 const app = new HyperMindApp(root);
-void app.start();
+const startPromise = app.start();
+if (new URLSearchParams(window.location.search).get('capture') === '1') {
+  const captureWindow = window as Window & {
+    __hypermindApp?: HyperMindApp;
+    __hypermindReady?: Promise<void>;
+  };
+  captureWindow.__hypermindApp = app;
+  captureWindow.__hypermindReady = startPromise;
+}
+void startPromise;
 if (import.meta.hot) import.meta.hot.dispose(() => app.dispose());

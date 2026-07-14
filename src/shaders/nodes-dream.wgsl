@@ -16,6 +16,8 @@ struct SceneUniforms {
   themeA: vec4f,
   themeB: vec4f,
   reserved: vec4f,
+  nodeRenderA: vec4f,
+  nodeRenderB: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -23,11 +25,15 @@ struct SceneUniforms {
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
-  @location(0) local: vec2f,
+  @location(0) local: vec3f,
   @location(1) color: vec4f,
   @location(2) worldCenter: vec3f,
   @location(3) metadata: vec4f,
   @location(4) @interpolate(flat) instanceIndex: u32,
+  @location(5) radius: f32,
+  @location(6) squash: f32,
+  @location(7) worldPosition: vec3f,
+  @location(8) cubeness: f32,
 };
 
 struct VolumeSample {
@@ -37,34 +43,80 @@ struct VolumeSample {
   proximity: f32,
 };
 
-fn quadVertex(index: u32) -> vec2f {
-  let vertices = array<vec2f, 6>(
-    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
-    vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
-  );
-  return vertices[index];
+fn hash11(n: f32) -> f32 {
+  return fract(sin(n * 127.1) * 43758.5453123);
+}
+
+fn nodeLocalBlend(instanceIndex: u32) -> f32 {
+  let stagger = hash11(f32(instanceIndex) + 1.7) * 0.22;
+  return smoothstep(stagger, stagger + 0.78, clamp(scene.timing.z, 0.0, 1.0));
+}
+
+fn sphereCubeHybrid(local: vec3f, cubeness: f32) -> vec3f {
+  let sphere = normalize(local);
+  let axes = abs(sphere);
+  let m = max(axes.x, max(axes.y, axes.z));
+  let cube = sphere / max(m, 1e-5);
+  return mix(sphere, cube, clamp(cubeness, 0.0, 1.0));
+}
+
+fn transformLocal(local: vec3f, radius: f32, squash: f32, cubeness: f32, shell: f32) -> vec3f {
+  let shaped = sphereCubeHybrid(local, cubeness);
+  return shaped * radius * shell * vec3f(1.0, 1.0, squash);
 }
 
 @vertex
 fn vs_main(
-  @builtin(vertex_index) vertexIndex: u32,
+  @location(0) local: vec3f,
   @builtin(instance_index) instanceIndex: u32
 ) -> VertexOutput {
   let node = nodes[instanceIndex];
-  let corner = quadVertex(vertexIndex);
   let radius = max(node.position.w * scene.render.z, 0.001);
-  let extent = 1.72;
-  let worldPosition = node.position.xyz
-    + scene.cameraRight.xyz * corner.x * radius * extent
-    + scene.cameraUp.xyz * corner.y * radius * extent;
+  let localBlend = nodeLocalBlend(instanceIndex);
+  let squash = mix(0.06, 1.0, localBlend);
+  let cubeness = mix(0.0, 0.52, localBlend);
+  let shaped = sphereCubeHybrid(local, cubeness);
+  let worldPosition = node.position.xyz + transformLocal(local, radius, squash, cubeness, 1.0);
 
   var output: VertexOutput;
   output.position = scene.viewProjection * vec4f(worldPosition, 1.0);
-  output.local = corner * extent;
+  output.local = shaped;
   output.color = node.color;
   output.worldCenter = node.position.xyz;
   output.metadata = node.metadata;
   output.instanceIndex = instanceIndex;
+  output.radius = radius;
+  output.squash = squash;
+  output.worldPosition = worldPosition;
+  output.cubeness = cubeness;
+  return output;
+}
+
+@vertex
+fn vs_aura(
+  @location(0) local: vec3f,
+  @builtin(instance_index) instanceIndex: u32
+) -> VertexOutput {
+  let node = nodes[instanceIndex];
+  let radius = max(node.position.w * scene.render.z, 0.001);
+  let localBlend = nodeLocalBlend(instanceIndex);
+  let squash = mix(0.06, 1.0, localBlend);
+  let cubeness = mix(0.0, 0.52, localBlend);
+  let shell = 1.72;
+  let shaped = sphereCubeHybrid(local, cubeness);
+  let worldPosition = node.position.xyz + transformLocal(local, radius, squash, cubeness, shell);
+
+  var output: VertexOutput;
+  output.position = scene.viewProjection * vec4f(worldPosition, 1.0);
+  output.local = shaped * shell;
+  output.color = node.color;
+  output.worldCenter = node.position.xyz;
+  output.metadata = node.metadata;
+  output.instanceIndex = instanceIndex;
+  output.radius = radius;
+  output.squash = squash;
+  output.worldPosition = worldPosition;
+  output.cubeness = cubeness;
   return output;
 }
 
@@ -74,34 +126,48 @@ fn hash21(p: vec2f) -> f32 {
   return fract((q.x + h) * (q.y + h));
 }
 
-fn rotate2(point: vec2f, angle: f32) -> vec2f {
-  let sine = sin(angle);
-  let cosine = cos(angle);
-  return vec2f(cosine * point.x - sine * point.y, sine * point.x + cosine * point.y);
+fn rotate2(point: vec2f, sineCosine: vec2f) -> vec2f {
+  return vec2f(
+    sineCosine.y * point.x - sineCosine.x * point.y,
+    sineCosine.x * point.x + sineCosine.y * point.y
+  );
 }
 
-fn volumeField(worldOffset: vec3f, seed: f32, time: f32) -> VolumeSample {
+fn volumeField(
+  worldOffset: vec3f,
+  seed: f32,
+  rotationXY: vec2f,
+  rotationXZ: vec2f,
+  domainOffset: vec3f
+) -> VolumeSample {
   var q = worldOffset;
-  let rotatedXY = rotate2(q.xy, seed * 2.17 + time * 0.045);
+  let rotatedXY = rotate2(q.xy, rotationXY);
   q = vec3f(rotatedXY, q.z);
-  let rotatedXZ = rotate2(q.xz, seed * 1.31 - time * 0.032);
+  let rotatedXZ = rotate2(q.xz, rotationXZ);
   q = vec3f(rotatedXZ.x, q.y, rotatedXZ.y);
 
   let r2 = dot(worldOffset, worldOffset);
   let radius = sqrt(r2);
-  let flow = vec3f(0.0, time * 0.13, -time * 0.09);
-  let domain = q * 5.15 + flow + vec3f(seed * 3.1, seed * 1.7, seed * 2.3);
+  let detailScale = clamp(scene.nodeRenderA.x, 0.6, 1.8);
+  let domain = q * (5.15 * detailScale) + domainOffset;
 
-  // A cheap warped gyroid-like field replaces hundreds of hash lookups per ray.
-  let warp = 0.17 * vec3f(
+  let warp = scene.nodeRenderA.y * vec3f(
     sin(domain.y * 0.73 + domain.z),
     sin(domain.z * 0.81 - domain.x),
     sin(domain.x * 0.67 + domain.y)
   );
   let p = domain + warp;
   let gyroid = dot(sin(p), cos(p * 0.618).yzx) * (1.0 / 3.0);
-  let second = dot(sin(p.yzx * 1.27 + seed), cos(p.zxy * 0.79 - seed)) * (1.0 / 3.0);
-  let fieldDistance = abs(gyroid + second * 0.22);
+  var layeredField = gyroid;
+  if (scene.nodeRenderB.x >= 1.5) {
+    let second = dot(sin(p.yzx * 1.27 + seed), cos(p.zxy * 0.79 - seed)) * (1.0 / 3.0);
+    layeredField += second * 0.22;
+  }
+  if (scene.nodeRenderB.x >= 2.5) {
+    let third = dot(sin(p.zxy * 2.03 - seed * 1.7), cos(p.xzy * 1.41 + seed * 0.8)) * (1.0 / 3.0);
+    layeredField += third * 0.10;
+  }
+  let fieldDistance = abs(layeredField);
   let proximity = exp(-72.0 * fieldDistance * fieldDistance);
 
   let interior = 1.0 - smoothstep(0.72, 1.0, radius);
@@ -114,59 +180,94 @@ fn volumeField(worldOffset: vec3f, seed: f32, time: f32) -> VolumeSample {
 }
 
 fn toneMap(color: vec3f) -> vec3f {
-  return vec3f(1.0) - exp(-max(color, vec3f(0.0)));
+  let positive = max(color, vec3f(0.0));
+  let peak = max(positive.x, max(positive.y, positive.z));
+  return positive / (1.0 + peak);
+}
+
+// Ray vs sphere in ellipsoid-local space (already scaled by 1/squash on Z).
+fn intersectSphere(origin: vec3f, direction: vec3f, radius: f32) -> vec2f {
+  let a = dot(direction, direction);
+  let b = 2.0 * dot(origin, direction);
+  let c = dot(origin, origin) - radius * radius;
+  let discriminant = b * b - 4.0 * a * c;
+  if (discriminant < 0.0 || a < 1e-8) {
+    return vec2f(-1.0, -1.0);
+  }
+  let root = sqrt(discriminant);
+  let t0 = (-b - root) / (2.0 * a);
+  let t1 = (-b + root) / (2.0 * a);
+  return vec2f(t0, t1);
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let radialDistance = length(input.local);
-  let aa = max(fwidth(radialDistance), 0.0015);
-  if (radialDistance > 1.0 + aa) {
+  let scale = vec3f(1.0, 1.0, max(input.squash, 0.06));
+  let invScale = 1.0 / scale;
+  let camLocal = (scene.cameraPosition.xyz - input.worldCenter) * invScale / max(input.radius, 0.001);
+  let surfaceLocal = input.local;
+  var direction = surfaceLocal - camLocal;
+  let directionLength = length(direction);
+  if (directionLength < 1e-5) {
     discard;
   }
+  direction /= directionLength;
 
-  let sphereRadiusSquared = max(1.0 - dot(input.local, input.local), 0.0);
-  let zExtent = sqrt(sphereRadiusSquared);
-  let chordLength = max(2.0 * zExtent, 0.0001);
+  // Hybrid corners stick out past the unit sphere; march a slightly larger bound.
+  let boundRadius = mix(1.0, 1.22, clamp(input.cubeness, 0.0, 1.0));
+  let hit = intersectSphere(camLocal, direction, boundRadius);
+  if (hit.y < 0.0) {
+    discard;
+  }
+  let tEnter = max(hit.x, 0.0);
+  let tExit = hit.y;
+  let chordLength = max(tExit - tEnter, 0.0001);
+
   let animated = step(0.5, scene.render.x);
   let time = scene.timing.x * animated;
-  let quality = clamp(scene.render.y, 0.0, 1.0);
-  let requestedSteps = 8u + u32(round(quality * 16.0));
-  let pixelRadius = 1.0 / max(fwidth(input.local.x), 0.001);
+  let requestedSteps = u32(round(clamp(scene.render.y, 8.0, 40.0)));
+  let pixelFootprint = max(fwidth(input.local.x), max(fwidth(input.local.y), fwidth(input.local.z)));
+  let pixelRadius = 1.0 / max(pixelFootprint, 0.001);
   let lod = smoothstep(5.0, 22.0, pixelRadius);
-  let lodSteps = 10u + u32(round(lod * 14.0));
+  let lodCeiling = 8u + u32(round(lod * 32.0));
+  let reducedSteps = min(requestedSteps, lodCeiling);
+  let lodStrength = clamp(scene.nodeRenderA.w, 0.0, 1.0);
+  let balancedSteps = u32(round(mix(f32(requestedSteps), f32(reducedSteps), lodStrength)));
   let interaction = max(clamp(input.metadata.y, 0.0, 1.0), clamp(input.metadata.z, 0.0, 1.0) * 0.64);
-  let activeSteps = min(requestedSteps, min(24u, lodSteps + u32(round(interaction * 4.0))));
+  let activeSteps = min(requestedSteps, min(40u, balancedSteps + u32(round(interaction * 4.0))));
   let baseStep = chordLength / f32(activeSteps);
   let seed = fract(f32(input.instanceIndex) * 0.6180339 + input.metadata.x * 0.173);
-  let jitterCell = floor((input.local + vec2f(1.75)) * 96.0);
-  let jitter = hash21(jitterCell + vec2f(seed * 41.0, seed * 67.0));
-  let facing = normalize(scene.cameraPosition.xyz - input.worldCenter);
+  let jitterPixel = floor(input.position.xy);
+  let jitter = hash21(jitterPixel + vec2f(seed * 41.0, seed * 67.0));
+  let jitterOffset = mix(0.5, jitter, clamp(scene.nodeRenderA.z, 0.0, 1.0));
+  let angleXY = seed * 2.17 + time * 0.045;
+  let angleXZ = seed * 1.31 - time * 0.032;
+  let rotationXY = vec2f(sin(angleXY), cos(angleXY));
+  let rotationXZ = vec2f(sin(angleXZ), cos(angleXZ));
+  let domainOffset = vec3f(0.0, time * 0.13, -time * 0.09)
+    + vec3f(seed * 3.1, seed * 1.7, seed * 2.3);
 
-  let deepBlue = mix(vec3f(0.008, 0.045, 0.23), scene.themeA.rgb * 0.28, 0.22);
-  let electricBlue = mix(vec3f(0.015, 0.32, 1.65), scene.themeB.rgb, 0.18);
-  let cyan = vec3f(0.10, 0.88, 2.20);
-  let hotCore = vec3f(1.05, 1.42, 2.05);
+  let regionColor = max(input.color.rgb, vec3f(0.0));
+  let deepBlue = mix(vec3f(0.006, 0.030, 0.16), regionColor * 0.58, 0.74);
+  let electricBlue = mix(vec3f(0.015, 0.32, 1.65), regionColor * 1.45, 0.72);
+  let cyan = mix(vec3f(0.10, 0.88, 2.20), regionColor * 1.58, 0.68);
+  let hotCore = mix(regionColor * 1.18 + vec3f(0.18, 0.24, 0.38), vec3f(1.05, 1.42, 2.05), 0.62);
   let pulse = 1.0 + scene.reserved.y * 0.09 * sin(time * 1.65 + seed * 12.0);
 
   var radiance = vec3f(0.0);
   var transmittance = 1.0;
-  var traveled = min(jitter * baseStep * 0.82, chordLength);
-  for (var i = 0u; i < 24u; i += 1u) {
-    if (i >= activeSteps || traveled >= chordLength || transmittance < 0.004) {
+  var traveled = 0.0;
+  for (var i = 0u; i < 40u; i += 1u) {
+    if (i >= activeSteps || transmittance < 0.004) {
       break;
     }
 
-    let z = zExtent - traveled;
-    let localPoint = vec3f(input.local, z);
-    let worldOffset = scene.cameraRight.xyz * localPoint.x
-      + scene.cameraUp.xyz * localPoint.y
-      + facing * localPoint.z;
-    let volume = volumeField(worldOffset, seed, time);
+    let sampleDistance = min(traveled + baseStep * jitterOffset, chordLength);
+    let localPoint = camLocal + direction * (tEnter + sampleDistance);
+    let worldOffset = localPoint * scale;
+    let volume = volumeField(worldOffset, seed, rotationXY, rotationXZ, domainOffset);
 
-    // Density-guided steps spend samples on the luminous structures, not empty space.
-    let nearFeature = clamp(max(volume.proximity, volume.core * 0.78), 0.0, 1.0);
-    let stepLength = min(chordLength - traveled, mix(baseStep * 1.72, baseStep * 0.46, nearFeature));
+    let stepLength = min(chordLength - traveled, baseStep);
     let extinction = volume.density * 0.58;
     let sampleAlpha = 1.0 - exp(-extinction * stepLength);
     let coreHeat = smoothstep(0.12, 0.94, volume.core);
@@ -176,25 +277,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     sampleColor = mix(sampleColor, hotCore, coreHeat * coreHeat * 0.84);
 
     radiance += sampleColor * transmittance * volume.density * stepLength * 2.75 * pulse;
-    // Restrained inverse-distance emission borrows the post's glow accumulation idea.
     let filamentGlow = min(volume.proximity * volume.proximity * stepLength * 0.52, 0.22);
     radiance += electricBlue * transmittance * filamentGlow;
     transmittance *= 1.0 - sampleAlpha;
-    traveled += max(stepLength, 0.0025);
+    traveled += stepLength;
   }
 
-  let edgeCoverage = 1.0 - smoothstep(1.0 - aa * 1.35, 1.0 + aa, radialDistance);
-  let coreSilhouette = exp(-13.0 * radialDistance * radialDistance);
-  let opacity = clamp(((1.0 - transmittance) * 0.84 + coreSilhouette * 0.12) * input.color.a * edgeCoverage, 0.0, 0.86);
+  let radialDistance = length(input.local.xy);
+  let aa = max(fwidth(radialDistance), 0.0015);
+  let edgeCoverage = 1.0 - smoothstep(1.0 - aa * 1.35, 1.0 + aa, length(input.local));
+  let coreSilhouette = exp(-13.0 * dot(input.local, input.local));
+  let opacity = clamp(((1.0 - transmittance) * 0.84 + coreSilhouette * 0.12) * input.color.a * max(edgeCoverage, 0.85), 0.0, 0.86);
   if (opacity < 0.002) {
     discard;
   }
 
   let exposure = max(scene.render.w, 0.1) * (1.0 + interaction * 0.16);
-  let resolvedCore = electricBlue * exp(-3.6 * radialDistance * radialDistance) * 0.16
-    + hotCore * coreSilhouette * 0.70;
-  var mapped = toneMap((radiance + resolvedCore) * exposure) * edgeCoverage;
-  mapped += vec3f(0.24, 0.72, 1.0) * interaction * exp(-42.0 * abs(radialDistance - 0.99));
+  let resolvedCore = electricBlue * exp(-3.6 * dot(input.local, input.local)) * 0.20
+    + hotCore * coreSilhouette * 0.58;
+  var mapped = toneMap((radiance + resolvedCore) * exposure);
+  mapped += vec3f(0.24, 0.72, 1.0) * interaction * exp(-42.0 * abs(length(input.local) - 0.99));
 
   return vec4f(max(mapped, vec3f(0.0)), opacity);
 }
@@ -225,6 +327,7 @@ fn fs_aura(input: VertexOutput) -> @location(0) vec4f {
     discard;
   }
 
-  let auraColor = mix(vec3f(0.015, 0.30, 1.35), vec3f(0.18, 0.82, 1.75), bloom * 0.72 + interaction * 0.25);
+  let regionAura = mix(input.color.rgb * 1.35, vec3f(0.08, 0.52, 1.55), 0.28);
+  let auraColor = mix(regionAura, regionAura * 1.12 + vec3f(0.08, 0.16, 0.28), bloom * 0.54 + interaction * 0.18);
   return vec4f(auraColor * energy, clamp(energy * 0.32, 0.0, 0.16));
 }

@@ -3,6 +3,12 @@ import type { AppSettings } from '../config/settings';
 import { EDGE_STRIDE, MAX_EDGES, MAX_NODES, NODE_STRIDE, type GraphNode, type Vec3 } from '../core/types';
 import type { GraphStore } from '../data/GraphStore';
 
+export const EDGE_FLAG_CROSS_REGION = 1;
+
+export function edgeRegionFlags(sourceCluster: number, targetCluster: number): number {
+  return sourceCluster === targetCluster ? 0 : EDGE_FLAG_CROSS_REGION;
+}
+
 export class GraphBuffers {
   readonly nodeBuffers: [GPUBuffer, GPUBuffer];
   readonly edgeBuffer: GPUBuffer;
@@ -74,9 +80,21 @@ export class GraphBuffers {
     for (let index = 0; index < this.nodeCount; index += 1) {
       const node = this.store.nodes[index]!;
       const color = new Float32Array(palette.clusters[node.cluster % palette.clusters.length]!);
+      const metadataOffset = index * 16 + 12;
+      const metadata = new Float32Array([
+        node.cluster,
+        this.nodeData[metadataOffset + 1]!,
+        this.nodeData[metadataOffset + 2]!,
+        this.nodeData[metadataOffset + 3]!,
+      ]);
       this.nodeData.set(color, index * 16 + 8);
-      for (const buffer of this.nodeBuffers) this.device.queue.writeBuffer(buffer, index * NODE_STRIDE + 32, color);
+      this.nodeData.set(metadata, metadataOffset);
+      for (const buffer of this.nodeBuffers) {
+        this.device.queue.writeBuffer(buffer, index * NODE_STRIDE + 32, color);
+        this.device.queue.writeBuffer(buffer, index * NODE_STRIDE + 48, metadata);
+      }
     }
+    this.writeEdges();
   }
 
   updateNodeMeta(index: number, selected: boolean, hovered: boolean, pinMode: -1 | 0 | 1): void {
@@ -136,6 +154,32 @@ export class GraphBuffers {
     return result;
   }
 
+  async readPositions(): Promise<Float32Array> {
+    if (this.nodeCount === 0) return new Float32Array(0);
+    const byteLength = this.nodeCount * NODE_STRIDE;
+    const staging = this.device.createBuffer({
+      label: 'Graph position readback',
+      size: byteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    try {
+      const encoder = this.device.createCommandEncoder({ label: 'Graph position query' });
+      encoder.copyBufferToBuffer(this.nodeBuffer, 0, staging, 0, byteLength);
+      this.device.queue.submit([encoder.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const records = new Float32Array(staging.getMappedRange());
+      const positions = new Float32Array(this.nodeCount * 4);
+      for (let index = 0; index < this.nodeCount; index += 1) {
+        const source = index * (NODE_STRIDE / 4);
+        positions.set(records.subarray(source, source + 4), index * 4);
+      }
+      staging.unmap();
+      return positions;
+    } finally {
+      staging.destroy();
+    }
+  }
+
   dispose(): void {
     this.nodeBuffers[0].destroy();
     this.nodeBuffers[1].destroy();
@@ -150,13 +194,17 @@ export class GraphBuffers {
     for (let index = 0; index < this.edgeCount; index += 1) {
       const edge = this.store.edges[index]!;
       const base = index * EDGE_STRIDE;
-      view.setUint32(base, Math.max(0, this.store.indexOf(edge.source)), true);
-      view.setUint32(base + 4, Math.max(0, this.store.indexOf(edge.target)), true);
-      view.setUint32(base + 8, 0, true);
+      const sourceIndex = Math.max(0, this.store.indexOf(edge.source));
+      const targetIndex = Math.max(0, this.store.indexOf(edge.target));
+      const flags = edgeRegionFlags(this.store.nodes[sourceIndex]?.cluster ?? 0, this.store.nodes[targetIndex]?.cluster ?? 0);
+      const crossesRegion = (flags & EDGE_FLAG_CROSS_REGION) !== 0;
+      view.setUint32(base, sourceIndex, true);
+      view.setUint32(base + 4, targetIndex, true);
+      view.setUint32(base + 8, flags, true);
       view.setUint32(base + 12, 0, true);
-      view.setFloat32(base + 16, 1.15, true);
-      view.setFloat32(base + 20, 0.55 + edge.strength * 0.45, true);
-      view.setFloat32(base + 24, index % 7 === 0 ? 0.9 : 0, true);
+      view.setFloat32(base + 16, crossesRegion ? 1.65 : 0.62, true);
+      view.setFloat32(base + 20, crossesRegion ? 0.80 + edge.strength * 0.18 : 0.46 + edge.strength * 0.34, true);
+      view.setFloat32(base + 24, 0, true);
       view.setFloat32(base + 28, (index % 11) * 0.17, true);
     }
     this.device.queue.writeBuffer(this.edgeBuffer, 0, data);

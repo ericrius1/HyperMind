@@ -2,11 +2,11 @@ import { buildScene, type SceneSeed } from '../sceneBuilder';
 
 const seed = {
   id: 'kabbalah',
-  title: 'Kabbalah: Worlds, Texts, and Repair',
+  title: 'Kabbalah and the Shattered Vessels of Light',
   shortTitle: 'Kabbalah',
-  kicker: 'JEWISH MYSTICAL TRADITIONS',
+  kicker: 'INFINITY · EXILE · REPAIR',
   description:
-    'A respectful map of Jewish mystical traditions: divine infinity and the sefirot, foundational texts, the Safed schools, Lurianic creation and repair, and the devotional life these ideas shaped.',
+    'Step carefully into a many-layered tradition of hidden light, living texts, shattered vessels, wandering sparks, and the patient work of repair.',
   palette: 'violet',
   layout: 'lattice',
   shape: 'tree',
@@ -17,7 +17,7 @@ const seed = {
         {
           id: 'infinite-and-manifest',
           label: 'Infinite and manifest',
-          description: 'Language for divine infinity and the mediated flow of divine presence into creation.',
+          description: 'Approach the horizon where the infinite hides in order that a finite world might appear.',
           concepts: [
             {
               title: 'Ein Sof',
@@ -44,7 +44,7 @@ const seed = {
         {
           id: 'four-worlds',
           label: 'The four worlds',
-          description: 'A widespread kabbalistic scheme of four interpenetrating levels of divine manifestation and creation.',
+          description: 'Climb four interwoven worlds, from nearness and emanation toward the dense wonder of embodied life.',
           concepts: [
             {
               title: 'Atzilut',
@@ -190,7 +190,7 @@ const seed = {
         {
           id: 'concealment-and-rupture',
           label: 'Concealment and rupture',
-          description: 'The distinctive Lurianic account of concealment, measured light, primordial form, and cosmic rupture.',
+          description: 'Enter the great drama: concealment, a measured ray, vessels filled beyond bearing, and the soundless moment they break.',
           concepts: [
             {
               title: 'Tzimtzum',
@@ -217,7 +217,7 @@ const seed = {
         {
           id: 'exile-and-repair',
           label: 'Exile and repair',
-          description: 'The Lurianic language of scattered holiness, concealment, souls, contemplative unification, and cosmic repair.',
+          description: 'Search among the fragments for hidden sparks, and ask how an ordinary act might help gather a wounded cosmos.',
           concepts: [
             {
               title: 'Nitzotzot',

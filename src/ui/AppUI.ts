@@ -14,7 +14,12 @@ export class AppUI extends EventTarget {
   private readonly loading: HTMLElement;
   private readonly loadingCopy: HTMLElement;
   private readonly inspector: HTMLElement;
+  private readonly inspectorBackdrop: HTMLElement;
   private readonly inspectorForm: HTMLFormElement;
+  private readonly tagEditor: HTMLElement;
+  private readonly tagList: HTMLElement;
+  private readonly tagInput: HTMLInputElement;
+  private readonly tagValue: HTMLInputElement;
   private readonly composer: HTMLElement;
   private readonly composerInput: HTMLInputElement;
   private readonly label: HTMLElement;
@@ -35,7 +40,7 @@ export class AppUI extends EventTarget {
     this.root = root;
     root.innerHTML = `
       <main class="app-shell">
-        <canvas id="graph-canvas" aria-label="Interactive HyperMind knowledge graph"></canvas>
+        <canvas id="graph-canvas" aria-label="Interactive HyperMind world map"></canvas>
         <div class="ambient-grain" aria-hidden="true"></div>
 
         <header class="topbar">
@@ -45,18 +50,26 @@ export class AppUI extends EventTarget {
               <span><b>HYPER</b><strong>MIND</strong></span>
             </a>
             <span class="brand-rule"></span>
-            <label class="scene-picker"><span>ATLAS</span><select aria-label="Sample scene"></select></label>
+            <label class="scene-picker"><span>WORLDS</span><select aria-label="Choose a knowledge world"></select></label>
           </div>
 
           <form class="search" role="search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>
-            <input type="search" placeholder="Find a thought…" aria-label="Find a thought" />
+            <input type="search" placeholder="Seek a place, person, or idea…" aria-label="Search this world" />
             <kbd>⌘K</kbd>
           </form>
 
           <div class="top-actions">
+            <div class="atlas-menu">
+              <button class="atlas-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Atlas save and transfer">Atlas</button>
+              <div class="atlas-dropdown" role="menu" hidden>
+                <button type="button" data-atlas="export-scene" role="menuitem">Export this world</button>
+                <button type="button" data-atlas="export-all" role="menuitem">Export all worlds</button>
+                <button type="button" data-atlas="import" role="menuitem">Import .hypermind</button>
+              </div>
+            </div>
             <button class="share-view" type="button" aria-label="Copy link to current view"><span>↗</span> Share view</button>
-            <button class="new-thought" type="button"><span>＋</span> New thought</button>
+            <button class="new-thought" type="button"><span>＋</span> Plant a discovery</button>
             <div class="dimension-switch" aria-label="View dimension">
               <button type="button" data-dimension="2d">2D</button>
               <button type="button" data-dimension="3d">3D</button>
@@ -75,8 +88,8 @@ export class AppUI extends EventTarget {
           </button>
         </nav>
 
-        <nav class="cluster-dock" aria-label="Scene subclusters">
-          <div class="cluster-intro"><span class="scene-kicker"></span><strong class="scene-title"></strong></div>
+        <nav class="cluster-dock" aria-label="World trails and quests">
+          <div class="cluster-intro"><span class="scene-kicker"></span><strong class="scene-title"></strong><p class="scene-invitation"></p></div>
           <div class="cluster-scroll"></div>
           <button class="share-scope" type="button" aria-label="Copy link to focused scope">↗ <span>Copy view</span></button>
         </nav>
@@ -91,49 +104,56 @@ export class AppUI extends EventTarget {
           <button type="button" data-preset="elastic"><i>⌁</i><span><b>Elastic web</b><small>Stiff spring chaos</small></span></button>
         </section>
 
-        <aside class="inspector" aria-label="Edit selected thought" aria-hidden="true">
+        <div class="inspector-backdrop" aria-hidden="true"></div>
+        <aside class="inspector" role="dialog" aria-modal="true" aria-label="Explore selected discovery" aria-hidden="true">
           <form class="inspector-form">
             <div class="inspector-head">
-              <div><span class="eyebrow">OPEN THOUGHT</span><span class="live-dot">LIVE</span></div>
-              <button class="close-inspector" type="button" aria-label="Close inspector">×</button>
+              <div><span class="eyebrow">DISCOVERY</span><span class="live-dot">FOUND</span></div>
+              <button class="close-inspector" type="button" aria-label="Close discovery">×</button>
             </div>
             <input type="hidden" name="id" />
             <label class="field title-field"><span>Title</span><input name="title" autocomplete="off" maxlength="80" /></label>
-            <label class="field"><span>What does this mean?</span><textarea name="description" rows="6" maxlength="1200"></textarea></label>
+            <label class="field"><span>Field notes</span><textarea name="description" rows="6" maxlength="1200"></textarea></label>
             <div class="field-row">
-              <label class="field"><span>Tags</span><input name="tags" placeholder="design, system" /></label>
-              <label class="field cluster-field"><span>Region</span><select name="cluster">
+              <div class="field tag-field"><span id="tags-label">Tags</span><div class="tag-editor" aria-labelledby="tags-label">
+                <div class="tag-list" aria-live="polite"></div>
+                <input class="tag-input" type="text" placeholder="Add a tag…" autocomplete="off" aria-label="Add a tag" />
+                <input class="tag-value" type="hidden" name="tags" />
+              </div></div>
+              <label class="field cluster-field"><span>Realm</span><select name="cluster">
                 <option value="0">Systems</option><option value="1">Making</option><option value="2">Mind</option><option value="3">Technology</option><option value="4">Living world</option>
               </select></label>
             </div>
-            <div class="node-meta"><span class="node-id"></span><span>Changes stay local</span></div>
+            <div class="node-meta"><span class="node-id"></span><span>Your marks stay in this world</span></div>
             <div class="inspector-share-row">
-              <button class="share-node" type="button"><span>↗</span> Copy node link</button>
-              <button class="portal-node" type="button"><span>→</span> <b>Open linked atlas</b></button>
+              <button class="share-node" type="button"><span>↗</span> Copy discovery link</button>
+              <button class="portal-node" type="button"><span>→</span> <b>Cross into another world</b></button>
             </div>
             <div class="inspector-actions">
-              <button class="save-node" type="submit">Save thought <kbd>⌘↵</kbd></button>
-              <button class="link-node" type="button"><span>↗</span> Link from this</button>
-              <button class="delete-node" type="button" aria-label="Delete thought">⌫</button>
+              <button class="save-node" type="submit">Keep discovery <kbd>⌘↵</kbd></button>
+              <button class="link-node" type="button"><span>↗</span> Open a trail</button>
+              <button class="delete-node" type="button" aria-label="Delete discovery">⌫</button>
             </div>
+            <button class="exit-inspector" type="button">Return to the overmap <kbd>Esc</kbd></button>
           </form>
         </aside>
 
         <form class="composer" aria-hidden="true">
           <div class="composer-orb">＋</div>
-          <div><span class="eyebrow">NEW THOUGHT</span><input maxlength="80" placeholder="Name the idea…" autocomplete="off" /></div>
-          <button type="submit">Create <kbd>↵</kbd></button>
+          <div><span class="eyebrow">NEW DISCOVERY</span><input maxlength="80" placeholder="What did you find?" autocomplete="off" /></div>
+          <button type="submit">Plant it <kbd>↵</kbd></button>
         </form>
 
-        <div class="selected-label" aria-hidden="true"><i></i><span></span></div>
+        <div class="selected-label" aria-hidden="true"><i></i><div class="selected-label-card"><strong></strong><p></p></div></div>
 
         <footer class="statusbar">
           <div class="runtime-pill"><i></i><span class="runtime-value">WEBGPU · LIVE</span></div>
-          <span class="count-value">0 nodes · 0 links</span>
+          <span class="count-value">0 discoveries · 0 trails</span>
           <span class="status-divider"></span>
-          <span class="mode-hint"><b>DRAG</b> pan</span>
-          <span class="mode-hint"><b>SCROLL</b> zoom</span>
-          <span class="mode-hint"><b>DOUBLE CLICK</b> create</span>
+          <span class="mode-hint"><b>CLICK</b> peek</span>
+          <span class="mode-hint"><b>DOUBLE CLICK</b> open · empty creates</span>
+          <span class="mode-hint"><b>SPACE</b> open selected</span>
+          <span class="mode-hint"><b>C</b> 2D/3D</span>
           <span class="mode-hint"><b>SHIFT + CLICK</b> multi-select</span>
           <span class="status-spacer"></span>
           <span class="dimension-value">2D CANVAS</span>
@@ -151,7 +171,12 @@ export class AppUI extends EventTarget {
     this.loading = this.required('.loading-screen');
     this.loadingCopy = this.required('.loading-screen p');
     this.inspector = this.required('.inspector');
+    this.inspectorBackdrop = this.required('.inspector-backdrop');
     this.inspectorForm = this.required<HTMLFormElement>('.inspector-form');
+    this.tagEditor = this.required('.tag-editor');
+    this.tagList = this.required('.tag-list');
+    this.tagInput = this.required<HTMLInputElement>('.tag-input');
+    this.tagValue = this.required<HTMLInputElement>('.tag-value');
     this.composer = this.required('.composer');
     this.composerInput = this.required<HTMLInputElement>('.composer input');
     this.label = this.required('.selected-label');
@@ -189,7 +214,7 @@ export class AppUI extends EventTarget {
   }
 
   setNodeCount(nodes: number, edges: number): void {
-    this.count.textContent = `${nodes} nodes · ${edges} links`;
+    this.count.textContent = `${nodes} discoveries · ${edges} trails`;
   }
 
   setScenes(scenes: readonly GraphScene[], currentScene: GraphScene): void {
@@ -201,14 +226,15 @@ export class AppUI extends EventTarget {
     this.sceneSelect.value = scene.id;
     this.required('.scene-kicker').textContent = scene.kicker;
     this.required('.scene-title').textContent = scene.title;
+    this.required('.scene-invitation').textContent = scene.description;
     const clusterSelect = this.inspectorForm.elements.namedItem('cluster') as HTMLSelectElement;
     clusterSelect.innerHTML = scene.clusterLabels.map((label, index) => `<option value="${index}">${label}</option>`).join('');
   }
 
   setSubclusters(groups: readonly SceneSubcluster[], focus: SceneFocus): void {
     const scroll = this.required('.cluster-scroll');
-    scroll.innerHTML = `<button type="button" data-focus="topic"><span>All</span><small>Topic</small></button>${groups.map((group) =>
-      `<button type="button" data-focus="${group.id}" title="${group.description}"><span>${group.label}</span><small>↗ link</small></button>`).join('')}`;
+    scroll.innerHTML = `<button type="button" data-focus="topic"><span>Whole world</span><small>WORLD MAP</small></button>${groups.map((group) =>
+      `<button type="button" data-focus="${group.id}" title="${group.description}"><span>${group.label}</span><small>✦ QUEST TRAIL</small></button>`).join('')}`;
     scroll.querySelectorAll<HTMLButtonElement>('[data-focus]').forEach((button) => button.addEventListener('click', () => {
       const id = button.dataset.focus;
       this.emit('focus', id === 'topic' ? { type: 'topic' } : { type: 'subcluster', id } as SceneFocus);
@@ -241,10 +267,16 @@ export class AppUI extends EventTarget {
     this.loading.querySelector('button')!.addEventListener('click', () => location.reload());
   }
 
+  isInspectorOpen(): boolean {
+    return this.inspector.classList.contains('is-visible');
+  }
+
   showInspector(node: GraphNode | null): void {
     if (!node) {
       this.inspector.classList.remove('is-visible');
+      this.inspectorBackdrop.classList.remove('is-visible');
       this.inspector.setAttribute('aria-hidden', 'true');
+      this.inspectorBackdrop.setAttribute('aria-hidden', 'true');
       return;
     }
     const field = <T extends HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(name: string): T =>
@@ -252,13 +284,15 @@ export class AppUI extends EventTarget {
     field<HTMLInputElement>('id').value = node.id;
     field<HTMLInputElement>('title').value = node.title;
     field<HTMLTextAreaElement>('description').value = node.description;
-    field<HTMLInputElement>('tags').value = node.tags.join(', ');
+    this.renderTags(node.tags);
     field<HTMLSelectElement>('cluster').value = String(node.cluster);
     this.portalButton.classList.toggle('is-visible', Boolean(node.portal));
     this.portalButton.dataset.scene = node.portal?.scene ?? '';
     this.portalButton.dataset.focus = node.portal?.focus ?? '';
-    this.portalButton.querySelector('b')!.textContent = node.portal?.label ?? 'Open linked atlas';
-    this.required('.node-id').textContent = `ID ${node.id.slice(-8).toUpperCase()}`;
+    this.portalButton.querySelector('b')!.textContent = node.portal?.label ?? 'Cross into another world';
+    this.required('.node-id').textContent = `MARK ${node.id.slice(-8).toUpperCase()}`;
+    this.inspectorBackdrop.classList.add('is-visible');
+    this.inspectorBackdrop.setAttribute('aria-hidden', 'false');
     this.inspector.classList.add('is-visible');
     this.inspector.setAttribute('aria-hidden', 'false');
   }
@@ -276,14 +310,34 @@ export class AppUI extends EventTarget {
     requestAnimationFrame(() => this.composerInput.focus());
   }
 
-  setSelectedLabel(text: string | null, x?: number, y?: number): void {
-    if (!text) {
+  setSelectedLabel(title: string | null, blurb?: string | null, x?: number, y?: number): void {
+    if (!title) {
       this.label.classList.remove('is-visible');
+      this.label.classList.remove('is-flipped');
       this.label.setAttribute('aria-hidden', 'true');
       return;
     }
-    this.label.querySelector('span')!.textContent = text;
-    if (x !== undefined && y !== undefined) this.label.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    this.label.querySelector('strong')!.textContent = title;
+    const copy = this.label.querySelector('p')!;
+    const text = blurb?.trim() ?? '';
+    copy.textContent = text;
+    copy.hidden = !text;
+    if (x !== undefined && y !== undefined) {
+      const margin = 12;
+      const connectorWidth = 24;
+      const statusbarClearance = 64;
+      const card = this.label.querySelector<HTMLElement>('.selected-label-card')!;
+      const totalWidth = connectorWidth + card.offsetWidth;
+      const flip = x + totalWidth + margin > window.innerWidth && x - totalWidth >= margin;
+      this.label.classList.toggle('is-flipped', flip);
+      const unclampedX = flip ? x - totalWidth : x;
+      const maxX = Math.max(margin, window.innerWidth - totalWidth - margin);
+      const positionX = Math.min(maxX, Math.max(margin, unclampedX));
+      const minY = margin + 26;
+      const maxY = Math.max(minY, window.innerHeight - statusbarClearance - card.offsetHeight + 26);
+      const positionY = Math.min(maxY, Math.max(minY, y));
+      this.label.style.transform = `translate3d(${positionX}px, ${positionY}px, 0)`;
+    }
     this.label.classList.add('is-visible');
     this.label.setAttribute('aria-hidden', 'false');
   }
@@ -304,6 +358,7 @@ export class AppUI extends EventTarget {
     this.required<HTMLButtonElement>('.share-view').addEventListener('click', () => this.emit('share', null));
     this.required<HTMLButtonElement>('.share-scope').addEventListener('click', () => this.emit('share', null));
     this.required<HTMLButtonElement>('.new-thought').addEventListener('click', () => this.showComposer(true));
+    this.bindAtlasMenu();
     this.physicsButton.addEventListener('click', () => this.emit('physics-toggle', this.physicsButton.getAttribute('aria-pressed') !== 'true'));
     this.physicsPanel.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((button) => button.addEventListener('click', () =>
       this.emit('physics-preset', button.dataset.preset as FunPhysicsPreset)));
@@ -319,6 +374,7 @@ export class AppUI extends EventTarget {
     });
     this.inspectorForm.addEventListener('submit', (event) => {
       event.preventDefault();
+      this.commitTagInput();
       const data = new FormData(this.inspectorForm);
       this.emit('save', {
         id: String(data.get('id') ?? ''),
@@ -327,6 +383,38 @@ export class AppUI extends EventTarget {
         tags: String(data.get('tags') ?? '').split(',').map((tag) => tag.trim()).filter(Boolean),
         cluster: Number(data.get('cluster') ?? 0),
       });
+    });
+    this.tagInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ',') {
+        event.preventDefault();
+        this.commitTagInput();
+      } else if (event.key === 'Backspace' && !this.tagInput.value) {
+        const tags = this.currentTags();
+        if (tags.length > 0) this.renderTags(tags.slice(0, -1));
+      }
+    });
+    this.tagInput.addEventListener('input', () => {
+      if (this.tagInput.value.includes(',')) this.commitTagInput();
+    });
+    this.tagInput.addEventListener('blur', () => this.commitTagInput());
+    this.tagEditor.addEventListener('click', (event) => {
+      const target = event.target as Element;
+      const removeButton = target.closest<HTMLButtonElement>('[data-remove-tag]');
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const removeIndex = Number(removeButton.dataset.removeTag);
+        this.renderTags(this.currentTags().filter((_, index) => index !== removeIndex));
+      } else if (!target.closest('.tag-chip')) {
+        this.tagInput.focus();
+      }
+    });
+    this.tagEditor.addEventListener('dblclick', (event) => {
+      const chip = (event.target as Element).closest<HTMLElement>('[data-tag-index]');
+      if (!chip || (event.target as Element).closest('[data-remove-tag]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.startTagEdit(Number(chip.dataset.tagIndex));
     });
     this.required<HTMLButtonElement>('.link-node').addEventListener('click', () =>
       this.emit('link', { id: String(new FormData(this.inspectorForm).get('id') ?? '') }));
@@ -338,7 +426,13 @@ export class AppUI extends EventTarget {
     }));
     this.required<HTMLButtonElement>('.delete-node').addEventListener('click', () =>
       this.emit('delete', { id: String(new FormData(this.inspectorForm).get('id') ?? '') }));
-    this.required<HTMLButtonElement>('.close-inspector').addEventListener('click', () => this.showInspector(null));
+    const closeInspector = (): void => {
+      this.showInspector(null);
+      this.emit('inspector-close', null);
+    };
+    this.required<HTMLButtonElement>('.close-inspector').addEventListener('click', closeInspector);
+    this.required<HTMLButtonElement>('.exit-inspector').addEventListener('click', closeInspector);
+    this.inspectorBackdrop.addEventListener('click', closeInspector);
     window.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -350,8 +444,109 @@ export class AppUI extends EventTarget {
     });
   }
 
+  private bindAtlasMenu(): void {
+    const toggle = this.required<HTMLButtonElement>('.atlas-toggle');
+    const menu = this.required<HTMLElement>('.atlas-dropdown');
+    const setOpen = (open: boolean): void => {
+      menu.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setOpen(menu.hasAttribute('hidden'));
+    });
+    menu.querySelectorAll<HTMLButtonElement>('[data-atlas]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const action = button.dataset.atlas;
+        setOpen(false);
+        if (action === 'export-scene') this.emit('export', 'scene');
+        else if (action === 'export-all') this.emit('export', 'all');
+        else if (action === 'import') this.emit('import', null);
+      });
+    });
+    window.addEventListener('pointerdown', (event) => {
+      if (!menu.hidden && !(event.target instanceof Node && this.required('.atlas-menu').contains(event.target))) {
+        setOpen(false);
+      }
+    });
+  }
+
   private emit<T>(type: string, detail: T): void {
     this.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+
+  private currentTags(): string[] {
+    return this.tagValue.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+  }
+
+  private commitTagInput(): void {
+    const incoming = this.tagInput.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+    if (incoming.length === 0) return;
+    const tags = [...this.currentTags()];
+    for (const tag of incoming) {
+      if (!tags.some((existing) => existing.localeCompare(tag, undefined, { sensitivity: 'accent' }) === 0)) tags.push(tag);
+    }
+    this.tagInput.value = '';
+    this.renderTags(tags);
+  }
+
+  private renderTags(tags: readonly string[]): void {
+    this.tagValue.value = tags.join(', ');
+    this.tagList.replaceChildren(...tags.map((tag, index) => {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.dataset.tagIndex = String(index);
+      chip.title = 'Double-click to edit';
+      const label = document.createElement('span');
+      label.textContent = tag;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.dataset.removeTag = String(index);
+      remove.setAttribute('aria-label', `Remove ${tag} tag`);
+      remove.textContent = '×';
+      chip.append(label, remove);
+      return chip;
+    }));
+  }
+
+  private startTagEdit(index: number): void {
+    const tags = this.currentTags();
+    const original = tags[index];
+    const chip = this.tagList.querySelector<HTMLElement>(`[data-tag-index="${index}"]`);
+    if (!original || !chip || chip.classList.contains('is-editing')) return;
+
+    const input = document.createElement('input');
+    input.className = 'tag-edit-input';
+    input.value = original;
+    input.setAttribute('aria-label', `Edit ${original} tag`);
+    input.style.width = `${Math.max(100, Math.min(300, original.length * 12 + 40))}px`;
+    chip.classList.add('is-editing');
+    chip.removeAttribute('title');
+    chip.replaceChildren(input);
+
+    let finished = false;
+    const finish = (commit: boolean): void => {
+      if (finished) return;
+      finished = true;
+      const edited = input.value.trim();
+      const duplicate = tags.some((tag, tagIndex) =>
+        tagIndex !== index && tag.localeCompare(edited, undefined, { sensitivity: 'accent' }) === 0);
+      if (commit && edited && !duplicate) tags[index] = edited;
+      this.renderTags(tags);
+    };
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
+    input.focus();
+    input.select();
   }
 
   private required<T extends Element = HTMLElement>(selector: string): T {

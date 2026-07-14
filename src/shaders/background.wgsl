@@ -32,11 +32,6 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   return output;
 }
 
-fn hash21(p: vec2f) -> f32 {
-  let q = fract(p * vec2f(123.34, 456.21));
-  return fract(q.x * q.y * (q.x + q.y + 45.32));
-}
-
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let aspect = scene.viewport.x / max(scene.viewport.y, 1.0);
@@ -57,7 +52,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let majorSpace = gridSpace * 0.2;
   let majorCell = abs(fract(majorSpace + 0.5) - 0.5) / max(fwidth(majorSpace), vec2f(0.0001));
   let majorLine = 1.0 - min(min(majorCell.x, majorCell.y), 1.0);
-  color += scene.themeB.rgb * (minorLine * 0.025 + majorLine * 0.055) * (0.4 + 0.6 * vignette);
+  let gridVisibility = clamp(scene.themeA.a, 0.0, 1.0);
+  color += scene.themeB.rgb * (minorLine * 0.025 + majorLine * 0.055) * (0.4 + 0.6 * vignette) * gridVisibility;
 
   let glowCenter = vec2f(-0.16 + sin(time * 0.071) * 0.08, 0.08 + cos(time * 0.053) * 0.06);
   let glow = exp(-5.0 * length(centered - glowCenter));
@@ -67,8 +63,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let midnight = step(0.5, scene.timing.w);
   color = mix(color, color * 0.24 + vec3f(0.0015, 0.004, 0.016), midnight);
 
-  let pixel = floor(input.position.xy * 0.5);
-  let grain = hash21(pixel + floor(time * 12.0)) - 0.5;
-  color += grain * 0.012;
+  // Broad, coherent atmosphere survives delivery compression without temporal pixel noise.
+  let atmosphere = sin(centered.x * 3.1 + time * 0.018) * sin(centered.y * 2.7 - time * 0.014);
+  color += scene.themeB.rgb * atmosphere * 0.0025;
   return vec4f(max(color, vec3f(0.0)), 1.0);
 }

@@ -1,7 +1,8 @@
 import { MAX_EDGES, MAX_NODES, type GraphData, type GraphEdge, type GraphNode, type Vec3 } from '../core/types';
 import { createStarterGraph } from './starterGraph';
+import type { PersistenceStore } from './persistence';
 
-const STORAGE_KEY = 'hypermind.graph.v2';
+const POSITION_DEBOUNCE_MS = 750;
 
 export class GraphStore extends EventTarget {
   readonly nodes: GraphNode[];
@@ -9,14 +10,24 @@ export class GraphStore extends EventTarget {
   sceneId: string;
   private idToIndex = new Map<string, number>();
   private sourceGraph: GraphData;
+  private persist: PersistenceStore | null = null;
+  private positionTimer: ReturnType<typeof setTimeout> | undefined;
+  private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(sceneId = 'tutorial', sourceGraph: GraphData = createStarterGraph()) {
     super();
     this.sceneId = sceneId;
     this.sourceGraph = structuredClone(sourceGraph);
-    const graph = this.load(sceneId, this.sourceGraph);
-    this.nodes = graph.nodes;
-    this.edges = graph.edges;
+    this.nodes = structuredClone(this.sourceGraph.nodes);
+    this.edges = structuredClone(this.sourceGraph.edges);
+    this.reindex();
+  }
+
+  async attachPersistence(store: PersistenceStore): Promise<void> {
+    this.persist = store;
+    const graph = await this.load(this.sceneId, this.sourceGraph);
+    this.nodes.splice(0, this.nodes.length, ...graph.nodes);
+    this.edges.splice(0, this.edges.length, ...graph.edges);
     this.reindex();
   }
 
@@ -77,11 +88,12 @@ export class GraphStore extends EventTarget {
     return edge;
   }
 
-  switchScene(sceneId: string, sourceGraph: GraphData): void {
+  async switchScene(sceneId: string, sourceGraph: GraphData): Promise<void> {
     if (sceneId === this.sceneId) return;
+    await this.flushPositions();
     this.sceneId = sceneId;
     this.sourceGraph = structuredClone(sourceGraph);
-    const graph = this.load(sceneId, this.sourceGraph);
+    const graph = await this.load(sceneId, this.sourceGraph);
     this.nodes.splice(0, this.nodes.length, ...graph.nodes);
     this.edges.splice(0, this.edges.length, ...graph.edges);
     this.reindex();
@@ -96,36 +108,80 @@ export class GraphStore extends EventTarget {
     this.commit('topology', 'reset');
   }
 
-  persistPositions(positions: Float32Array): void {
-    for (let index = 0; index < this.nodes.length; index += 1) {
-      const offset = index * 4;
+  setNodePosition(index: number, position: Vec3): void {
+    const node = this.nodes[index];
+    if (!node) return;
+    node.position = [...position];
+    this.schedulePositionPersist();
+  }
+
+  persistPositions(positions: Float32Array, stride = 4): void {
+    const safeStride = Math.max(3, Math.floor(stride));
+    const count = Math.min(this.nodes.length, Math.floor(positions.length / safeStride));
+    for (let index = 0; index < count; index += 1) {
+      const offset = index * safeStride;
       this.nodes[index]!.position = [positions[offset]!, positions[offset + 1]!, positions[offset + 2]!];
     }
-    this.persist();
+    this.schedulePositionPersist();
+  }
+
+  async flushPositions(): Promise<void> {
+    if (this.positionTimer !== undefined) globalThis.clearTimeout(this.positionTimer);
+    this.positionTimer = undefined;
+    await this.queuePersist();
   }
 
   private reindex(): void {
     this.idToIndex = new Map(this.nodes.map((node, index) => [node.id, index]));
   }
 
+  private schedulePositionPersist(): void {
+    if (this.positionTimer !== undefined) globalThis.clearTimeout(this.positionTimer);
+    this.positionTimer = globalThis.setTimeout(() => {
+      this.positionTimer = undefined;
+      void this.queuePersist();
+    }, POSITION_DEBOUNCE_MS);
+  }
+
   private commit(kind: 'topology' | 'content', id: string): void {
-    this.persist();
+    void this.queuePersist();
     this.dispatchEvent(new CustomEvent('change', { detail: { kind, id } }));
   }
 
-  private persist(): void {
-    localStorage.setItem(`${STORAGE_KEY}.${this.sceneId}`, JSON.stringify({ nodes: this.nodes, edges: this.edges }));
+  private queuePersist(): Promise<void> {
+    this.persistQueue = this.persistQueue
+      .then(() => this.persistCurrentScene())
+      .catch((error) => console.error('Failed to persist graph', error));
+    return this.persistQueue;
   }
 
-  private load(sceneId: string, sourceGraph: GraphData): GraphData {
-    try {
-      const stored = JSON.parse(localStorage.getItem(`${STORAGE_KEY}.${sceneId}`) ?? '') as GraphData;
-      if (Array.isArray(stored.nodes) && Array.isArray(stored.edges)) {
-        return { nodes: stored.nodes.slice(0, MAX_NODES), edges: stored.edges.slice(0, MAX_EDGES) };
+  private async persistCurrentScene(): Promise<void> {
+    if (!this.persist) return;
+    await this.persist.saveScene(this.sceneId, { nodes: this.nodes, edges: this.edges });
+  }
+
+  private async load(sceneId: string, sourceGraph: GraphData): Promise<GraphData> {
+    if (this.persist) {
+      try {
+        const stored = await this.persist.loadScene(sceneId);
+        if (stored) return hydrateFromStored(stored, sourceGraph);
+      } catch (error) {
+        console.warn('Failed to load persisted scene; using starter map.', error);
       }
-    } catch {
-      // Corrupt or incompatible graph data resets to the current starter map.
     }
     return structuredClone(sourceGraph);
   }
+}
+
+function hydrateFromStored(stored: GraphData, sourceGraph: GraphData): GraphData {
+  const sourceById = new Map(sourceGraph.nodes.map((node) => [node.id, node]));
+  const nodes = stored.nodes.slice(0, MAX_NODES).map((node) => {
+    const source = sourceById.get(node.id);
+    if (!source) return node;
+    if (/Open this thought, rewrite it/.test(node.description)) {
+      return { ...node, description: source.description };
+    }
+    return node;
+  });
+  return { nodes, edges: stored.edges.slice(0, MAX_EDGES) };
 }

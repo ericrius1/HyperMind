@@ -42,6 +42,10 @@ export class GPUContext {
   resize(width: number, height: number): boolean {
     width = Math.max(1, Math.floor(width));
     height = Math.max(1, Math.floor(height));
+    const maxDimension = this.device.limits.maxTextureDimension2D;
+    const limitScale = Math.min(1, maxDimension / width, maxDimension / height);
+    width = Math.max(1, Math.floor(width * limitScale));
+    height = Math.max(1, Math.floor(height * limitScale));
     if (width === this.width && height === this.height && this.colorTexture && this.depthTexture) return false;
     this.width = width;
     this.height = height;

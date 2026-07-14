@@ -9,6 +9,11 @@ export interface CameraFrame {
   zoom: number;
 }
 
+/** ~45° yaw / isometric pitch — classic three-quarter view. */
+export const ISOMETRIC_YAW = Math.PI / 4;
+export const ISOMETRIC_PITCH = Math.atan(1 / Math.sqrt(2));
+const PERSPECTIVE_FOV = Math.PI / 4.2;
+
 export class CameraController {
   dimension: ViewDimension = '2d';
   mode: CameraMode = 'orbit';
@@ -16,23 +21,56 @@ export class CameraController {
   targetCenter: Vec3 = [0, 0, 0];
   zoom = 16;
   targetZoom = 16;
-  yaw = 0.65;
-  pitch = 0.58;
-  targetYaw = 0.65;
-  targetPitch = 0.58;
+  yaw = 0;
+  pitch = 0;
+  targetYaw = 0;
+  targetPitch = 0;
   distance = 28;
   targetDistance = 28;
+  private minZoom = 0.9;
+  private maxZoom = 90;
   private keys = new Set<string>();
+  private transitioning = false;
 
   setDimension(dimension: ViewDimension): void {
+    const previous = this.dimension;
     this.dimension = dimension;
-    if (dimension === '3d') {
-      this.targetDistance = Math.max(16, this.zoom * 1.6);
+    if (dimension === '3d' && previous !== '3d') {
+      // Match the current 2D framing: face-on along +Z, same subject scale.
+      this.yaw = 0;
+      this.pitch = 0;
+      this.targetYaw = ISOMETRIC_YAW;
+      this.targetPitch = ISOMETRIC_PITCH;
+      const matched = this.distanceForZoom(this.zoom);
+      this.distance = matched;
+      this.targetDistance = matched;
+      this.transitioning = true;
+    } else if (dimension === '2d' && previous !== '2d') {
+      // Fold back to face-on before ortho takes over; keep the same center.
+      this.targetYaw = 0;
+      this.targetPitch = 0;
+      this.targetZoom = clamp(this.zoomForDistance(this.distance), this.minZoom, this.maxZoom);
+      this.transitioning = true;
     }
+  }
+
+  setTransitioning(active: boolean): void {
+    this.transitioning = active;
   }
 
   setMode(mode: CameraMode): void {
     this.mode = mode;
+  }
+
+  setZoomBounds(minZoom: number, maxZoom: number): void {
+    this.minZoom = Math.max(0.05, Math.min(minZoom, maxZoom));
+    this.maxZoom = Math.max(this.minZoom, maxZoom);
+    this.targetZoom = clamp(this.targetZoom, this.minZoom, this.maxZoom);
+    this.zoom = clamp(this.zoom, this.minZoom, this.maxZoom);
+  }
+
+  focus(position: Vec3): void {
+    this.targetCenter = [...position];
   }
 
   key(code: string, pressed: boolean): void {
@@ -60,7 +98,7 @@ export class CameraController {
 
   dolly(delta: number): void {
     const factor = Math.exp(delta * 0.0012);
-    if (this.dimension === '2d') this.targetZoom = clamp(this.targetZoom * factor, 1.4, 90);
+    if (this.dimension === '2d') this.targetZoom = clamp(this.targetZoom * factor, this.minZoom, this.maxZoom);
     else this.targetDistance = clamp(this.targetDistance * factor, 4, 120);
   }
 
@@ -73,14 +111,15 @@ export class CameraController {
     const ny = 1 - ((clientY - rect.top) / Math.max(1, rect.height)) * 2;
     const aspect = rect.width / Math.max(1, rect.height);
     const oldZoom = this.targetZoom;
-    const nextZoom = clamp(oldZoom * Math.exp(delta * 0.0012), 1.4, 90);
+    const nextZoom = clamp(oldZoom * Math.exp(delta * 0.0012), this.minZoom, this.maxZoom);
     this.targetCenter[0] += nx * aspect * (oldZoom - nextZoom);
     this.targetCenter[1] += ny * (oldZoom - nextZoom);
     this.targetZoom = nextZoom;
   }
 
   update(dt: number): void {
-    const response = this.dimension === '2d' ? 16 : 11;
+    // ~3s settle while morphing; snappy once settled.
+    const response = this.transitioning ? 1.2 : this.dimension === '2d' ? 16 : 11;
     this.zoom = damp(this.zoom, this.targetZoom, response, dt);
     this.distance = damp(this.distance, this.targetDistance, response, dt);
     this.yaw = damp(this.yaw, this.targetYaw, response, dt);
@@ -115,20 +154,15 @@ export class CameraController {
     }
   }
 
-  frame(width: number, height: number): CameraFrame {
+  /**
+   * Blend 0 = ortho 2D. Blend > 0 = perspective from the current orbit pose.
+   * No camera-position lerp — the subject stays where it is; only angles/projection change.
+   */
+  frame(width: number, height: number, dimensionBlend = this.dimension === '3d' ? 1 : 0): CameraFrame {
     const aspect = width / Math.max(1, height);
-    if (this.dimension === '2d') {
-      const halfHeight = this.zoom;
-      const halfWidth = halfHeight * aspect;
-      const projection = mat4Ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, -200, 200);
-      const position: Vec3 = [this.center[0], this.center[1], 48];
-      const view = mat4LookAt(position, this.center, [0, 1, 0]);
-      return { viewProjection: mat4Multiply(projection, view), position, right: [1, 0, 0], up: [0, 1, 0], zoom: this.zoom };
-    }
-    const { position, right, up } = this.basis();
-    const projection = mat4Perspective(Math.PI / 4.2, aspect, 0.08, 400);
-    const view = mat4LookAt(position, this.center, up);
-    return { viewProjection: mat4Multiply(projection, view), position, right, up, zoom: this.distance };
+    const blend = clamp(dimensionBlend, 0, 1);
+    if (blend <= 0.0001) return this.frameOrtho(aspect);
+    return this.framePerspective(aspect);
   }
 
   screenDeltaToWorld(dxPixels: number, dyPixels: number, viewportHeight: number): Vec3 {
@@ -146,6 +180,30 @@ export class CameraController {
     const ny = 1 - ((clientY - rect.top) / rect.height) * 2;
     const aspect = rect.width / Math.max(1, rect.height);
     return [this.center[0] + nx * this.zoom * aspect, this.center[1] + ny * this.zoom, 0];
+  }
+
+  distanceForZoom(zoom: number): number {
+    return Math.max(4, zoom / Math.tan(PERSPECTIVE_FOV * 0.5));
+  }
+
+  zoomForDistance(distance: number): number {
+    return distance * Math.tan(PERSPECTIVE_FOV * 0.5);
+  }
+
+  private frameOrtho(aspect: number): CameraFrame {
+    const halfHeight = this.zoom;
+    const halfWidth = halfHeight * aspect;
+    const projection = mat4Ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, -200, 200);
+    const position: Vec3 = [this.center[0], this.center[1], 48];
+    const view = mat4LookAt(position, this.center, [0, 1, 0]);
+    return { viewProjection: mat4Multiply(projection, view), position, right: [1, 0, 0], up: [0, 1, 0], zoom: this.zoom };
+  }
+
+  private framePerspective(aspect: number): CameraFrame {
+    const { position, right, up } = this.basis();
+    const projection = mat4Perspective(PERSPECTIVE_FOV, aspect, 0.08, 400);
+    const view = mat4LookAt(position, this.center, up);
+    return { viewProjection: mat4Multiply(projection, view), position, right, up, zoom: this.distance };
   }
 
   private basis(): { position: Vec3; right: Vec3; up: Vec3 } {
