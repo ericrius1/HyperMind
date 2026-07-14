@@ -1,6 +1,6 @@
 # HyperMind
 
-<video src="./docs/hypermind-demo.mp4" width="100%" controls muted autoplay loop playsinline></video>
+![HyperMind demo](docs/hypermind-demo.gif)
 
 HyperMind is a raw-WebGPU spatial canvas for connected ideas. It combines an infinite 2D graph, a navigable 3D view, immediate HTML editing, GPU force layouts, three hot-reloadable shader skins, and a Box3D-powered physics playground.
 
