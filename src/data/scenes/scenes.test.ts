@@ -4,18 +4,25 @@ import { parseFocus } from '../sceneRoute';
 import { DEFAULT_SCENE_ID, getScene, SCENES, SCENES_BY_ID } from './index';
 
 describe('sample scene catalog', () => {
-  it('contains the default agent-learning world plus four fully nested atlases', () => {
-    expect(DEFAULT_SCENE_ID).toBe('agent-learning');
+  it('contains the default foliage world plus five nested atlases', () => {
+    expect(DEFAULT_SCENE_ID).toBe('foliage');
     expect(getScene('missing').id).toBe(DEFAULT_SCENE_ID);
-    expect(SCENES.map((scene) => scene.id)).toEqual(['agent-learning', 'tutorial', 'kabbalah', 'francis', 'pilgrim']);
-    const agentScene = SCENES_BY_ID.get(DEFAULT_SCENE_ID)!;
-    expect(agentScene.graph.nodes).toHaveLength(50);
-    expect(agentScene.clusterLabels).toEqual([
-      'RL Foundations',
-      'Learning Algorithms',
-      'Multi-Agent Learning',
-      'Evolutionary Computation',
-      'Persistent San Francisco Lab',
+    expect(SCENES.map((scene) => scene.id)).toEqual([
+      'foliage',
+      'agent-learning',
+      'tutorial',
+      'kabbalah',
+      'francis',
+      'pilgrim',
+    ]);
+    const foliageScene = SCENES_BY_ID.get(DEFAULT_SCENE_ID)!;
+    expect(foliageScene.graph.nodes).toHaveLength(50);
+    expect(foliageScene.clusterLabels).toEqual([
+      'Architecture',
+      'LODs',
+      'Performance',
+      'Textures & Compression',
+      'World Systems',
     ]);
     for (const scene of SCENES) {
       expect(scene.clusterLabels).toHaveLength(5);

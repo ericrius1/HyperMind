@@ -4,10 +4,10 @@
 
 HyperMind is a raw-WebGPU spatial canvas for connected ideas. It combines an infinite 2D graph, a navigable 3D view, immediate HTML editing, GPU force layouts, three hot-reloadable shader skins, and a Box3D-powered physics playground.
 
-It ships with five editable atlases. The reinforcement-learning atlas is the default:
+It ships with six editable atlases. The foliage atlas is the default:
 
+- **San Francisco Foliage Systems** — native trees, blade grass, LODs, streaming budgets, KTX2 materials/compression, and how foliage plugs into terrain, wind, shadows, and site layouts in the SF open world.
 - **Reinforcement Learning for Evolving Agents** — RL foundations, practical algorithms, multi-agent learning, genetic algorithms, neuroevolution, and a concrete training architecture for persistent agents in the San Francisco open world.
-
 - **Tutorial Atlas** — systems, making, mind, technology, and the living world.
 - **Kabbalah: Worlds, Texts, and Repair** — Jewish mystical traditions, sefirot, texts, Safed, Lurianic teaching, and religious life.
 - **Francis of Assisi** — conversion, the Canticle of the Creatures, the Wolf of Gubbio tradition, Damietta, pilgrimage, and the Franciscan family.
@@ -64,7 +64,7 @@ Artifacts land in `release/` (macOS DMG/zip, Windows NSIS, Linux AppImage).
 
 - Drag empty space to pan in 2D or orbit in 3D. Shift-drag pans in 3D.
 - Scroll to zoom or dolly. Zooming in 2D stays centered beneath the pointer.
-- Click a node to peek its title and one-line blurb beside it. Double-click or Space opens the discovery modal for the selection. Shift-click builds a selection.
+- Click a node to select it and peek its title/blurb. Camera stays put — press `F` to focus the selection. Double-click or Space opens the discovery modal. Shift-click builds a multi-select.
 - Use the **WORLDS** selector to switch topics. The bottom navigator frames individual subclusters.
 - **Atlas** exports or imports a `.hypermind` file for backup and cross-device transfer.
 - **Share view** copies the current topic or subcluster link. Every discovery modal also has **Copy discovery link**.
@@ -72,8 +72,8 @@ Artifacts land in `release/` (macOS DMG/zip, Windows NSIS, Linux AppImage).
 - Drag selected nodes. The **Dragged nodes influence graph** setting switches between connected and isolated dragging.
 - Double-click empty canvas or use **Plant a discovery** to create a node. Use **Open a trail** and click a target to connect ideas.
 - Close the discovery modal with the ×, **Return to the overmap**, click outside, or `Esc`.
-- **Play physics** or `F` toggles Box3D play mode. Choose zero-g tethers, lunar drop, or elastic web.
-- `C` toggles 2D/3D. `1`, `2`, `3` choose Paperlight, Luminous, or Midnight Core rendering.
+- **Play physics** or `P` toggles Box3D play mode. Choose zero-g tethers, lunar drop, or elastic web.
+- `F` focuses the camera on the current selection. `C` toggles 2D/3D. `1`, `2`, `3` choose Paperlight, Luminous, or Midnight Core rendering.
 - `/` toggles diagnostics, `m` toggles landmark overlays, and `.` restores the current source defaults.
 - In 3D fly mode, use WASD, Space, and Shift.
 

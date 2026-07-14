@@ -60,6 +60,10 @@ export class AppUI extends EventTarget {
           </form>
 
           <div class="top-actions">
+            <a class="github-link" href="https://github.com/ericrius1/HyperMind" target="_blank" rel="noopener noreferrer" aria-label="Open HyperMind on GitHub">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.52 2.87 8.35 6.84 9.71.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.31.1-2.73 0 0 .84-.27 2.75 1.05A9.3 9.3 0 0 1 12 6.84c.85.004 1.71.12 2.51.34 1.9-1.32 2.74-1.05 2.74-1.05.55 1.42.2 2.47.1 2.73.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.8-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.48A10.05 10.05 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"/></svg>
+              <span>GitHub</span>
+            </a>
             <div class="atlas-menu">
               <button class="atlas-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Atlas save and transfer">Atlas</button>
               <div class="atlas-dropdown" role="menu" hidden>
@@ -84,9 +88,22 @@ export class AppUI extends EventTarget {
           <button type="button" class="physics-button" aria-pressed="false">
             <span class="physics-icon" aria-hidden="true">✦</span>
             <span><b>Play physics</b><small>BOX3D</small></span>
-            <kbd>F</kbd>
+            <kbd>P</kbd>
           </button>
         </nav>
+
+        <aside class="keys-panel" aria-label="Keyboard shortcuts">
+          <span class="eyebrow">KEYS</span>
+          <dl>
+            <div><dt><kbd>F</kbd></dt><dd>Focus selection</dd></div>
+            <div><dt><kbd>P</kbd></dt><dd>Physics play</dd></div>
+            <div><dt><kbd>C</kbd></dt><dd>2D / 3D</dd></div>
+            <div><dt><kbd>Space</kbd></dt><dd>Open selected</dd></div>
+            <div><dt><kbd>Esc</kbd></dt><dd>Clear / close</dd></div>
+            <div><dt><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></dt><dd>Render skins</dd></div>
+            <div><dt><kbd>/</kbd></dt><dd>Diagnostics</dd></div>
+          </dl>
+        </aside>
 
         <nav class="cluster-dock" aria-label="World trails and quests">
           <div class="cluster-intro"><span class="scene-kicker"></span><strong class="scene-title"></strong><p class="scene-invitation"></p></div>
@@ -150,9 +167,10 @@ export class AppUI extends EventTarget {
           <div class="runtime-pill"><i></i><span class="runtime-value">WEBGPU · LIVE</span></div>
           <span class="count-value">0 discoveries · 0 trails</span>
           <span class="status-divider"></span>
-          <span class="mode-hint"><b>CLICK</b> peek</span>
-          <span class="mode-hint"><b>DOUBLE CLICK</b> open · empty creates</span>
-          <span class="mode-hint"><b>SPACE</b> open selected</span>
+          <span class="mode-hint"><b>CLICK</b> select · peek</span>
+          <span class="mode-hint"><b>F</b> focus</span>
+          <span class="mode-hint"><b>P</b> physics</span>
+          <span class="mode-hint"><b>SPACE</b> open</span>
           <span class="mode-hint"><b>C</b> 2D/3D</span>
           <span class="mode-hint"><b>SHIFT + CLICK</b> multi-select</span>
           <span class="status-spacer"></span>

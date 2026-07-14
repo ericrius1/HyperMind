@@ -470,6 +470,10 @@ class HyperMindApp {
       event.preventDefault();
       this.settings.set('dimension', this.settings.values.dimension === '2d' ? '3d' : '2d');
     } else if (event.key === 'f' || event.key === 'F') {
+      event.preventDefault();
+      void this.focusSelection();
+    } else if (event.key === 'p' || event.key === 'P') {
+      event.preventDefault();
       void this.setFunPhysics(!this.funPhysics);
     } else if (event.key === '1' || event.key === '2' || event.key === '3') {
       const skin = ({ '1': 'simple', '2': 'luminous', '3': 'dream' } as const)[event.key];
@@ -511,8 +515,6 @@ class HyperMindApp {
     if (!this.selected.has(index)) return;
 
     const snapshots = await this.buffers.readNodes([...this.selected]);
-    const pickedNode = snapshots.get(index);
-    if (pickedNode) this.camera.focus(pickedNode.position);
     const currentPointer = this.pointer;
     if (!currentPointer || currentPointer.id !== pointerId) return;
     currentPointer.bases = snapshots;
@@ -1016,6 +1018,21 @@ class HyperMindApp {
     if (!this.inspectorOpen && !this.ui.isInspectorOpen()) return;
     this.inspectorOpen = false;
     this.ui.showInspector(null);
+  }
+
+  private async focusSelection(): Promise<void> {
+    const index = this.firstSelected();
+    if (index === null) {
+      this.ui.toast('Select a node, then press F to focus');
+      return;
+    }
+    if (this.selectedPosition) {
+      this.camera.focus(this.selectedPosition);
+      return;
+    }
+    const snapshots = await this.buffers.readNodes([index]);
+    const node = snapshots.get(index);
+    if (node) this.camera.focus(node.position);
   }
 
   private firstSelected(): number | null {
